@@ -1,0 +1,2058 @@
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+    Weiwei Sun1 ∗ Xuhui Zhou1 ∗
+    Jiarui Liu1 Weihua Du1 Haojia Sun1 Yiqing Xie1 Qianou Ma1
+    Sihao Chen2 Mengting Wan2 Longqi Yang2 Pei Zhou2
+    Sherry Wu1 Sean Welleck1 Graham Neubig1 Yiming Yang1 Maarten Sap1
+    1 Carnegie Mellon University      2 Microsoft
+
+    {weiweis,xuhuiz}@andrew.cmu.edu
+    § Code         Model       Data
+
+
+
+                                             Abstract
+
+           Humans learn social norms and behaviors from verbal feedback (e.g., a
+           parent saying “that was rude” or a friend explaining “here’s why that hurt”).
+           Yet, learning from feedback for LLMs has largely focused on domains like
+           code and math where RL rewards are directly verifiable and condensed
+           into scalar values. As LLMs are increasingly also used for simulating
+           human behavior, e.g., standing in for users, patients, students, and other
+           personas, there is a pressing need to make them more human-like, which
+           requires embracing a fundamentally different kind of signal: feedback that
+           is verbal, subjective, and multi-faceted. We present D ITTO, a model trained
+           by treating verbal feedback as a first-class signal in reinforcement learning.
+           After each rollout, D ITTO receives verbal feedback and generates a feedback-
+           conditioned improved rollout; both outputs are jointly optimized with
+           GRPO, distilling verbal guidance into the base policy without requiring
+           feedback at test time. We also introduce S OUL (Simulation gym Of hUman-
+           Like behavior), a unified benchmark and training data suite spanning
+           10 tasks across six categories: Theory of Mind, character role play, social
+           skill, learner simulation, user simulation, and persona simulation. D ITTO
+           achieves an average 36% improvement over the base model and exceeds
+           GPT-5.4 on 6 of 10 S OUL benchmarks, demonstrating that RL with verbal
+           feedback is a promising direction for training LLMs to simulate human
+           behavior.
+
+
+1     Introduction
+
+Modeling human behavior has long been recognized as a crucial step toward imbuing
+artificial intelligence with social intelligence (Tomasello, 2019; Nass & Moon, 2000). From the
+Turing test to modern user simulators, the drive to faithfully model how people think, speak,
+and act has evolved into a practical necessity for training and evaluating collaborative AI
+systems. Today, LLMs are increasingly called upon to serve as these vital proxies—standing
+in for users in dialogue systems (Davidson et al., 2023; Sekulic et al., 2024), for patients
+in clinical settings (Schmidgall et al., 2024), for students in educational platforms (Ross &
+Andreas, 2025; Dou et al., 2025), and for diverse personas in social and safety testing (Zhou
+et al., 2024; 2025; Wang et al., 2025).
+Yet current LLM simulators fall short, exhibiting systematic Sim2Real gaps—from homoge-
+neous outputs lacking individual variation (Jiang et al., 2025), to misaligned cognitive biases
+(Tjuatja et al., 2024), superhuman behaviors (Oh & Linzen, 2025), and consistent divergences
+from real users in downstream tasks (Zhou et al., 2026b). One reason for this gap may lie in
+how these models are trained. Reinforcement learning for LLMs, whether RLHF (Ouyang
+et al., 2022), DPO (Rafailov et al., 2023), or RL with verifiable rewards (DeepSeek-AI, 2025;
+     ∗ Equal contribution.
+
+
+
+                                                    1
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+                                                                    Theory of Mind                                                                                                                   Role Play
+                            FanToM                                         HiToM                                           ToMi                                          CoSER                                          LifeChoices
+        1.0                                                                                           1.0
+                                        0.94 0.95                                       0.77 0.78                                              0.93    0.7 0.66                                           0.9 0.87
+                                                      0.8
+              0.90                                          0.70
+        0.9                                                                                           0.9 0.88                                         0.6                                                                                       0.80
+                                                                                                                   0.85                                                                0.54               0.8
+                                                                                                                                        0.82                                                  0.51                          0.75
+                                                      0.6                 0.56 0.58
+Score
+                            0.78 0.78                                                                                                                  0.5
+        0.8                                                                                           0.8                                                                0.42 0.43                                                        0.69
+                                                                                                                                                                                                          0.7                      0.67
+                     0.72                                                                                                 0.72                         0.4        0.35
+                                                      0.4          0.37                                                                                                                                              0.60
+        0.7                                                                                           0.7                        0.68
+                                                                                                                                                                                                          0.6
+                                                                                                                                                       0.3
+
+        0.6                                           0.2                                             0.6                                              0.2                                                0.5
+
+                                                                       Learner                                                                                                                                           Persona
+                        Social Skill                                  Simulation                                                               User Simulation                                                          Simulation
+                            Sotopia                                       Mistakes                                   MirrorBench                                         UserLLM                                            TwinVoice
+                                                      0.7                                             0.8                                              1.0                                    0.93
+        0.5                                    0.47                                                                                            0.71                                    0.86               0.7 0.64
+                                                                                                                                        0.68                                                                                                     0.61
+                                        0.42          0.6 0.57 0.58                     0.58                                                           0.8
+                                                                                               0.56
+        0.4                                                                                           0.6                        0.55                                                                                                     0.47
+                                                                          0.52                              0.54                                                                                          0.5
+                                                                                                                                                                                                                                   0.43
+Score
+              0.30 0.31 0.31                          0.5                                                                 0.48                         0.6 0.57          0.54                                               0.39
+        0.3                      0.28                                            0.46
+                                                                                                                                                                                0.47
+                                                                                                      0.4          0.36                                                                                   0.3
+                                                      0.4                                                                                              0.4                                                           0.23
+        0.2                                                                                                                                                       0.32
+
+
+        0.1                                           0.3                                             0.2                                              0.2                                                0.1
+
+                                                            GPT-5.4                     GPT-5-nano                  Others                      Base              GRPO                    Ditto
+
+
+
+
+Figure 1: Benchmark results on human simulation tasks. Ditto wins 6 of 10 benchmarks,
+surpassing both frontier closed-source models and specialized human-simulation baselines.
+
+
+
+Shao et al., 2024), reduces all feedback to a scalar reward or binary preference. This suffices
+when correctness is verifiable: a proof is right or wrong, a test passes or fails. But simulating
+human behavior is not about solving a puzzle correctly; it is about acting in ways that
+are socially grounded, individually varied, and contextually appropriate. A score of 0.6
+conveys almost nothing about why a simulated user was too polite or too predictable, let
+alone how to fix it. Humans themselves learn social behavior not from scores but from
+verbal feedback, through explanations, corrections, and dialogue (Tomasello, 2019), and we
+argue that training human simulators should follow a similar principle.
+As shown in Figure 2, we present D ITTO, a model that incorporates verbal feedback as
+a first-class signal in reinforcement learning for human behavior simulation (Song et al.,
+2026; Shi et al., 2026). After each rollout, D ITTO receives verbal feedback and generates an
+improved rollout conditioned on it; both outputs are jointly optimized via GRPO, so that the
+base policy internalizes the verbal guidance without requiring it at test time (§3). Crucially,
+our approach is flexible across task formats: it handles discriminative tasks (multiple-choice,
+binary classification), generative tasks (open-ended dialogue), and multi-turn interactions
+where the model must sustain human-like behavior across an entire conversation, all within
+a single unified training framework.
+To train and evaluate D ITTO, we introduce S OUL (Simulation gym Of hUman-Like be-
+havior; Figure 3), a unified benchmark and training data suite comprising 10 tasks across
+six categories of human behavior modeling : theory of mind (Kim et al., 2023; He et al.,
+2024; Jin et al., 2024; Nematzadeh et al., 2018; Sclar et al., 2023), character role play (Wang
+et al., 2026), social skill (Zhou et al., 2024), learner simulation (Ross & Andreas, 2025),
+user simulation (Hathidara et al., 2026; Naous et al., 2025), and persona simulation (Du
+et al., 2025). A key bottleneck for RL-based human simulation has been the absence of
+training data: most existing human simulation benchmarks provide only evaluation sets,
+not training splits. S OUL addresses this by pairing every task with curated RL training data,
+adapting official splits where available and constructing new ones where not, such as 6,000
+synthetic belief-tracking scenarios for HiToM, and 1,358 persona items for TwinVoice built
+from three external corpora via a two-stage LLM generation and filtering pipeline. The
+resulting mixture spans discriminative, generative, multi-turn, and multi-agent formats
+within a single unified RL training framework (§4).
+Our experiments on S OUL yield several findings. First, our Qwen3-8B D ITTO model achieves
+an average normalized score of 0.726, a 36% improvement over the base model, while
+matching or exceeding GPT-5.4 on 6 of 10 tasks. Gains are broad: D ITTO outperforms
+GPT-5.4 on all three Theory of Mind tasks, on both user simulation tasks (e.g., scoring 0.930
+compared to GPT-5.4’s 0.575 on UserLLM), and on Sotopia social skill (0.470 vs. 0.300),
+spanning discriminative, generative, and multi-turn formats. Second, verbal feedback
+
+
+                                                                                                                          2
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+consistently improves over standard GRPO, with the largest gains on generative and multi-
+turn tasks such as ToMi (+11 points), LifeChoices (+11), and TwinVoice (+14). Third, analysis
+of training dynamics shows that verbal feedback accelerates learning—on Sotopia, D ITTO
+outperforms GRPO from the earliest training steps—and helps mitigate safety risks: D ITTO
+better preserves secret-keeping throughout RL optimization, whereas standard GRPO
+degrades on this dimension.
+
+Contributions.
+
+       (i) We show that verbal feedback is a crucial training signal for human behavior sim-
+           ulation, providing actionable, dimension-specific guidance beyond scalar rewards,
+           improving learning speed and reducing safety risks such as secret leakage.
+      (ii) We introduce D ITTO, which distills verbal feedback into the base policy via
+           feedback-conditioned rollouts jointly optimized with GRPO, achieving a 36% im-
+           provement over the base model and matching or exceeding GPT-5.4 on 6/10 tasks
+           with an 8B model.
+      (iii) We release S OUL, a unified training and evaluation environment for human-like
+            behavior across 10 tasks in six categories, covering discriminative, generative, multi-
+            turn, and multi-agent settings, with curated RL training data for each task.
+
+
+2     Related Work
+
+2.1    Incorporating Verbal Feedback in RL Training
+
+Standard RL for language models—whether RLHF (Ouyang et al., 2022), DPO (Rafailov
+et al., 2023), or GRPO (DeepSeek-AI, 2025; Shao et al., 2024)—reduces all feedback to
+scalar rewards or binary preferences. To handle complex feedback signals, another line of
+work decomposes the scalar reward into finer-grained or multi-dimensional signals while
+remaining in the scalar regime (Wu et al., 2023; Yu et al., 2025; Sun et al., 2025). These
+methods enrich the reward structure but still compress each dimension into a scalar, losing
+rich nature of verbal feedback.
+To incorporate verbal feedback into improving LLM agents, prior work has explored su-
+pervised fine-tuning (Scheurer et al., 2023; Liu et al., 2024) or inference-time self-reflection
+(Shinn et al., 2023; Madaan et al., 2023), but these approaches lack the exploration capacity
+of RL or do not update model weights from experience. A recent line of work instead incor-
+porates verbal feedback directly into RL optimization. Self-Rewarding Language Models
+(Yuan et al., 2024) generate verbal self-judgments to construct preference pairs for iterative
+DPO. Experiential RL (Shi et al., 2026) introduces an experience-reflection-consolidation
+loop mixed RL and supervised fine-tuning. Concurrent to our approach, RLTF (Song et al.,
+2026) formalizes reinforcement learning from text feedback and proposes self-distillation
+(RLTF-SD), which trains the single-turn policy to match its own feedback-conditioned
+second-turn generations. However, these works focus extensively on domains with veri-
+fiable rewards, such as mathematics and reasoning puzzles. Human behavior simulation
+poses fundamentally different challenges: interactions are multi-turn, rewards are subjective
+and multi-dimensional.
+
+2.2    Simulating Human Behavior with LLMs
+
+LLM-based human simulation spans a broad landscape of tasks. User simulation has
+evolved from rule-based and statistical approaches for dialogue management (Schatzmann
+et al., 2006; Li et al., 2016) to LLM-based simulators for task-oriented dialogue (Davidson
+et al., 2023; Sekulic et al., 2024; Sun et al., 2022), information-seeking (Sun et al., 2021; Zhang
+et al., 2024; Ren et al., 2024), and recommendation (Wang et al., 2025; Bougie & Watanabe,
+2025). Beyond user simulation, LLMs are increasingly used for social interaction (Zhou
+et al., 2024; 2025), character role-play (Wang et al., 2026), persona simulation (Samuel et al.,
+2025), and learner simulation (Ross & Andreas, 2025).
+
+
+                                                 3
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+                                                             student
+                                  x                                    r0
+          S OUL                         πθ                     y0            Joint GRPO
+      j Theory of Mind                                                         group-relative
+                                                                             optimization over
+        c Role Play                                                          {(y0 , r0 ), (y1 , r1 )}
+                                      Ú Verbal Feedback
+       ± Social Skill
+                                       h: “push back more on con-
+        Learner Sim                   flicts. . . ”
+                                                     LLM-as-Judge
+           User Sim       h                                                                Ditto
+                              x+h                                      r1    W Test time
+       ç Persona Sim
+                                        πθ                     y1
+          10 tasks                                                             x → πθ → y
+                                                             teacher        (no feedback needed)
+
+
+Figure 2: Overview of D ITTO. ➀ Given prompt x from S OUL, the policy generates a student
+rollout y0 , scored as r0 . ➁ An LLM judge produces verbal feedback: per-dimension critiques
+and a reflection h. ➂ h is concatenated with x and fed into πθ to generate a teacher rollout
+y1 , scored as r1 . ➃ Both are jointly optimized via GRPO. At test time, no feedback is needed.
+
+
+However, recent efforts have revealed systematic Sim2Real gaps: LLM-simulated human
+behavior shows systematic differences compared to real humans (Seshadri et al., 2026; Tjuatja
+et al., 2024; Zhou et al., 2026b), which undermine the utility of simulators for downstream
+evaluation and training. Training-based approaches have begun to address this—UserLLM
+(Naous et al., 2025) via SFT on human conversations and Sotopia-RL (Yu et al., 2025) via RL
+with multi-dimensional rewards. However, each targets a narrow set of tasks (e.g., Yu et al.
+(2025) focus only on social skills, Naous et al. (2025) focus only on user simulation). Our
+work incorporates verbal feedback into RL to improve a single model across the 10 diverse
+tasks in S OUL, spanning six categories of human behavior modeling.
+
+
+3     Method
+
+3.1    Problem Formulation
+
+We study the problem of training a language model for human simulation tasks. Given an
+input x (e.g., an instruction, scenario, dialogue history, or user profile), the model generates
+an output trajectory
+                                  y = (y1 , . . . , y T ) ∼ πθ (· | x ),
+where πθ is the current policy.
+Each sampled trajectory is evaluated by a task-specific judge or simulator, which returns
+supervision for learning. In the standard RL setting, this supervision is reduced to a scalar
+reward
+                                        r ( x, y) ∈ R.
+Our goal is to train the policy πθ to maximize task performance in these human simulation
+tasks, while allowing training to exploit richer judge supervision when available.
+
+3.2    Verbal Feedback
+
+In many human simulation tasks, the judge provides not only a scalar reward but also
+rich verbal feedback, such as dimension-wise scores, textual critiques, and task-specific
+suggestions. Formally, for a rollout y ∼ πθ (· | x ), the judge returns
+                                       (r, h) = J ( x, y),                                              (1)
+
+
+                                               4
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+where r is a scalar reward and h is structured feedback describing what was done well, what
+went wrong, and how the behavior can be improved.
+This feedback is often highly informative. For example, in human behavior simulation, it
+may reflect dimensions such as believability, relationship maintenance, knowledge consis-
+tency, goal achievement, and adherence to social norms. Standard RL methods typically
+compress all such information into a single scalar reward, which can lose useful learning
+signal.
+To ensure robustness of learning, we cast h as privileged information (Vapnik & Vashist,
+2009; Vapnik & Izmailov, 2015): it is available during training but not at test time. Our goal
+is therefore to use this verbal feedback to improve the base policy πθ (· | x ), while keeping
+inference-time generation unchanged.
+
+3.3   Learning from Verbal Feedback
+
+We aim to optimize the base policy πθ (y | x ) using reward and feedback during training,
+so the policy internalizes feedback-driven improvements without requiring feedback at
+inference time.
+To achieve this, for each sampled rollout
+                                                y0 ∼ πθ (· | x ),                                      (2)
+we ask the judge to provide reward and feedback
+                                            (r0 , h) = J ( x, y0 ),                                    (3)
+and then sample a second rollout conditioned on the same feedback:
+                                   y1 ∼ πθ (· | x, h),       r1 = R( x, y1 ).                          (4)
+Here, y0 is the original rollout from the base policy, which we refer to as the draft rollout,
+while y1 is the feedback-conditioned rollout, which we refer to as the refined rollout. Both
+rollouts are generated by the same policy with shared model weights; they differ only in
+their prompting context, where the refined rollout additionally uses explicit verbal feedback
+to guide improvement.
+We optimize both behaviors during training. First, we train the base policy to learn from
+feedback-induced improvements without conditioning on feedback at inference. Second,
+we include an additional GRPO objective on feedback-conditioned rollouts themselves, so
+the model also becomes better at generating improved responses from feedback during
+training.
+Concretely, for each prompt x, we first sample G original rollouts {yi,0 }iG=1 from the base
+policy. For each yi,0 , we obtain judge feedback hi and generate a corresponding feedback-
+conditioned rollout yi,1 . This gives the training group
+
+                                          G( x ) = {yi,0 , yi,1 }iG=1 ,                                (5)
+which contains both the original rollouts and their feedback-conditioned counterparts.
+We compute group-relative advantages over samples in G( x ): We compute group-relative
+advantages over all samples in G( x ):
+
+                     ri,j − µr                   1 G 1
+                                                2G i∑  ∑ ri,j ,
+            Ai,j =             ,        µr =                              σr = std({ri,j }iG,1
+                                                                                           =1,j=0 ).   (6)
+                          σr                        =1 j =0
+
+
+We then apply the standard clipped GRPO objective to this group:
+                                                                                
+                         G       |yi,j |                                      
+        Lgroup = −Ex  ∑ ∑ ∑ min ρi,j,t Ai,j , clip(ρi,j,t , 1 − ϵ, 1 + ϵ) Ai,j  ,                    (7)
+                             i =1 j∈{0,1} t=1
+
+
+                                                         5
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+where
+                                              πθ (yi,j,t | x, yi,j,<t )
+                                  ρi,j,t =                               .                    (8)
+                                             πold (yi,j,t | x, yi,j,<t )
+
+In addition, we apply an extra GRPO update on the feedback-conditioned rollouts {yi,1 }iG=1
+alone, treating them as a separate GRPO group:
+                                                                                  
+                             G |yi,1 |                                          
+               Lfb = −Ex  ∑ ∑ min ρ̂i,t Âi,1 , clip(ρ̂i,t , 1 − ϵ, 1 + ϵ) Âi,1  ,    (9)
+                             i =1 t =1
+
+where Âi,1 is computed by normalizing rewards within the feedback-conditioned group
+{ri,1 }iG=1 . The final training loss is
+                                         L = Lgroup + Lfb .                                  (10)
+
+In this way, feedback serves two roles during training: it produces improved rollouts
+that help the base policy learn better behavior, and it also supports a direct RL signal for
+improving the model’s ability to respond to feedback itself.
+
+3.4   Connections to Other RL Approaches
+
+Our approach is inspired by, or developed concurrently with, several recent works on RL
+with textual feedback. We discuss the most relevant connections below.
+
+Connection to RLTF Our method is related to RL from Text Feedback (RLTF; Song et al.,
+2026), which also uses training-time text feedback to improve single-turn performance.
+Both methods first generate a student output, then a feedback-conditioned teacher output,
+and train the policy to absorb the teacher’s improvement. Our method differs in three
+ways: (1) we use GRPO over the joint group y0 , y1 rather than AWR (advantage-weighted
+regression, (Peng et al., 2019)); (2) our teacher conditions on a judge-generated reflection h
+rather than raw feedback; and (3) unlike RLTF-SD, which targets tasks with verifiable rewards,
+we focus on social simulation, where feedback is noisy, subjective, and multi-dimensional.
+We compare against an RLTF-SD variant in our ablation study (section 6.2).
+
+Connection to ERL Experiential RL (ERL) (Shi et al., 2026) instead uses supervised fine-
+tuning (SFT) on reject-sampled teacher rollouts to internalize feedback into the student
+model. In contrast, we train on all teacher rollouts with an RL objective, allowing us to
+differentiate teacher rollout quality in continuous-reward settings and improve sample
+efficiency. We also compare against an ERL variant in our ablation study.
+
+Connection to SDPO Several works propose self-distillation policy optimization, distilling
+textual feedback into the student with a reverse KL objective (Vapnik & Vashist, 2009; Vapnik
+& Izmailov, 2015; Shenfeld et al., 2026; Ye et al., 2026; Hubotter et al., 2026). In contrast, our
+approach uses a forward alternative: sampling from the teacher rather than the student,
+and optimizing with group-normalized advantage. In addition, we optimize the feedback-
+conditioned model via Lfb rather than using an EMA model. We also compare against
+SDPO-like variants in our ablation study.
+
+4     S OUL: Simulation Gym of Human-Like Behavior
+A key bottleneck in training and evaluating human simulators is the lack of a unified
+resource covering the full breadth of human-like behavior. Existing benchmarks each focus
+on a narrow slice, such as Theory of Mind, role-play, social interaction, or user simulation,
+and use incompatible formats, metrics, and data splits (Yu et al., 2025; Du et al., 2026; Wang
+et al., 2026; Wu et al., 2026). To address this, we introduce S OUL-Bench (Simulation gym Of
+hUman-Like behavior), a unified benchmark and training suite spanning 10 tasks across six
+categories of human simulation (Figure 3). For each task, S OUL provides a held-out test set
+
+
+                                                     6
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+         j Theory of Mind                                  User Simulation                          c Character Role Play
+
+  FanToM       MCQ Multi-party ToM                     MirrorBench      MT    Human-like users       CoSER    MA     Literary character dialogue
+
+  HiToM     MCQ Higher-order belief                    UserLLM      GEN    Single-turn user gen.     LifeChoices    MCQ Decision-making
+
+  ToMi    QA    False-belief reasoning
+
+
+
+
+                                                               S OUL
+
+
+     ç Persona Simulation                                ± Social Skill                               Learner Simulation
+
+                 TwinVoice      MCQ                             Sotopia      MA                                 Mistakes     MCQ
+
+         Persona-consistent responses                  Social interaction with goals                      Student misconceptions
+
+                            MCQ Discriminative   QA Open QA   GEN Generative      MT Multi-Turn    MA Multi-Agent
+
+
+
+Figure 3: Overview of S OUL, our unified benchmark and training data suite spanning 10
+tasks across six categories of human simulation.
+
+
+for evaluation and a curated training set for RL. When training splits are available, we use
+them directly; otherwise, we construct training contexts from held-out evaluation data or
+related datasets. Full task descriptions, examples, and statistics are provided in Section C.
+
+Theory of Mind. We include three tasks probing different aspects of mental-state reason-
+ing. FanToM (Kim et al., 2023) tests ToM in multi-party conversations with information
+asymmetry, requiring MCQ and open-ended reasoning about who knows what (1,086 test);
+we select 18 conversations for testing and use the rest for training. HiToM (He et al., 2024)
+tests higher-order nested beliefs with deception and private vs. public communication (100
+test; MCQ); we use the official benchmark for evaluation and generate 200 additional stories
+(6,000 training examples). ToMi (Nematzadeh et al., 2018) is a classic false-belief test; we use
+the paraphrased ParaToMi version (Sclar et al., 2023) to test robust ToM reasoning beyond
+surface cues (600 test; QA), with 6,004 paraphrased training examples.
+
+Character Role Play. We include two character role-play tasks. CoSER (Wang et al., 2026)
+evaluates literary character simulation from 771 books, where given a scenario, character
+profile, and motivations, the model conducts a multi-turn dialogue (up to 20 turns) scored
+by an LLM judge on Storyline Consistency, Anthropomorphism, Character Fidelity, and
+Storyline Quality. We evaluate 200 conversations (100 ID, 100 OOD) and use the 26.5k-
+dialogue training set. LifeChoices (Xu et al., 2024a) evaluates persona-driven decision
+making with 1,462 decision points from 388 novels, where the model selects the option
+most consistent with a character’s original decision given context, scenario, and identity,
+emphasizing behavior-level fidelity and reasoning over characters’ knowledge, experiences,
+and evolving motivations.
+
+Social Skill. Sotopia (Zhou et al., 2024) evaluates social skills through dyadic agent
+simulation. Given a scenario and private social goals for two agents, the agents interact
+for up to 20 turns to achieve their goals. An LLM judge evaluates the interaction across
+seven dimensions, including believability, relationship, knowledge, secret-keeping, financial
+outcomes, and goal achievement. Following Zhou et al. (2026a), we evaluate on the Sotopia-
+hard split of 100 scenarios. For training, we use the 2,310 scenarios from Sotopia-π (Yu et al.,
+2025), derived from 462 base scenarios with 5 character-pair variations and no overlap with
+the evaluation set.
+
+Learner Simulation. Mistakes (Ross & Andreas, 2025) evaluates whether models can
+faithfully simulate incorrect student reasoning in K-12 math. Given a multiple-choice math
+
+
+                                                                    7
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+    Category       Benchmark     GPT-5.4   GPT-5-nano     Others    Base    GRPO     D ITTO
+                   FanToM         0.900        0.720       0.780a   0.780   0.940     0.950
+    ToM            HiToM          0.700        0.370       0.560c   0.580   0.770     0.780
+                   ToMi           0.880        0.850       0.720a   0.680   0.820     0.930
+                   CoSER          0.659        0.352       0.419c   0.435   0.541     0.512
+    Role Play
+                   LifeChoices    0.870        0.600       0.750c   0.670   0.690     0.800
+    Social Skill   Sotopia        0.300        0.310       0.312b   0.277   0.423     0.470
+    Learner Sim.   Mistakes       0.570        0.580       0.520a   0.460   0.580     0.560
+                   MirrorBench    0.536        0.358       0.481a   0.547   0.683     0.713
+    User Sim.
+                   UserLLM        0.575        0.324       0.537c   0.469   0.863     0.930
+    Persona Sim.   TwinVoice      0.640        0.230       0.390c   0.430   0.470     0.610
+    Average                       0.663        0.469       0.547    0.533   0.678     0.726
+
+Table 1: Main results on S OUL tasks. We report the primary metric for each benchmark
+(higher is better). Others refers to the best result achieved by other specialized human-
+simulation models, including a HumanLM-8B (Wu et al., 2026), b Sotopia-RL-7B (Yu et al.,
+2025), c HER-32B (Du et al., 2026), d Coser-8B (Wang et al., 2026). Base denotes the base model,
+Qwen3-VL-8B-Instruct. Bold indicates the best result in each row.
+
+problem and a natural-language description of a misconception, the model must select
+the wrong answer a student with that misconception would choose. We evaluate on 600
+instances using accuracy. For training, we use the Eedi dataset from the NeurIPS 2024
+Kaggle competition “Mining Misconceptions in Mathematics”1 , which contains K-12 math
+questions with four answer options and misconception annotations on incorrect choices.
+We convert each labeled (question, wrong-option) pair into a separate training instance.
+
+User Simulation. MirrorBench (Hathidara et al., 2026) evaluates multi-turn human-like
+user utterance generation: given a synthesized user goal, the model generates all user turns
+while an LLM replays assistant responses, and the conversation is compared to the original
+human dialogue using lexical diversity metrics (MATTR, HD-D, Yule’s K) and LLM-judge
+realism scores. We evaluate 795 episodes across four domains and train on about 3,400
+resampled conversations from the same corpora. UserLLM (Naous et al., 2025) evaluates
+single-turn user utterance generation: given context and user intent, the model generates
+one user message. We evaluate CSQA (role adherence), NQ (intent adherence), and PRISM
+(diversity, intent decomposition, termination prediction, AI-detection; 1,800 test instances),
+and train on datasets constructed from PRISM (intent consistency), NaturalQuestions (user
+persistence), and CommonsenseQA (role fidelity).
+
+Persona Simulation. TwinVoice (Du et al., 2025) evaluates persona simulation via a
+discriminative task: given a user’s conversation history and a new anchor post, the model
+selects the response that best matches the user’s communication style. The 5,687 evaluation
+instances span social, interpersonal, and narrative persona, testing opinion consistency,
+memory recall, and lexical fidelity, and we use accuracy as the metric. For training, we
+construct 1,335 instances from three external corpora (Bluesky posts, Pushshift Telegram
+messages, and Project Gutenberg novels); persona histories are generated from each source,
+GPT-5.4-mini drafts candidate items, and GPT-5.4 filters them into the final multiple-choice
+training set.
+
+5    Experimental Setup
+
+Implementation Details. We use Qwen3-VL-8B-Instruct2 as the base model. We sample
+1,024 instances from each S OUL task training split, for a total of 10,240 training instances.
+Training is implemented in Verl using LoRA tuning, with a LoRA rank of 32, LoRA alpha
+    1 https://www.kaggle.com/competitions/eedi-mining-misconceptions-in-mathematics
+    2 https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct
+
+
+
+                                               8
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+of 64, a constant learning rate of 5e-6, a batch size of 64, a group size of 8, and we train for
+around 100 steps. Maximum prompt and output lengths are both set to 8192. For multi-
+agent tasks (i.e., CoSER), we assign the final reward to each agent. Across our experiments,
+we use gpt-5-nano as the judge model and environment model, except for CoSER, where
+we use gpt-5.4 as the judge model to provide more stable evaluations.
+Baselines. We compare against the following: (1) Representative proprietary models: GPT-
+5.4 and GPT-5-nano. We use GPT-5-nano as the judge model to generate training feedback.
+(2) Other open-source models specialized for human simulation: Sotopia-RL-7B (Yu et al.,
+2025), HER-32B (Du et al., 2026), Coser-8B (Wang et al., 2026), and HumanLM-8B (Wu et al.,
+2026). We evaluate them on our tasks and report the best result for each task. (3) Base, the
+base model Qwen3-VL-8B-Instruct, and GRPO, the base model trained with GRPO under
+the same training setup and datasets.
+Evaluation Protocol. We evaluate each model on all 10 S OUL tasks using the metrics
+defined in Section 4. Given the large size of many tasks, we sample 100 instances for
+evaluation instead of using the full set. For tasks with multiple metrics, we report the
+average score as the main metric.
+
+6     Experimental Results
+
+6.1   Main Results
+
+Table 1 presents results across S OUL tasks. We make the following observations.
+(1) Compared with proprietary models and existing specialized models, our trained models
+achieve clear improvements, demonstrating that our training environment S OUL is effective
+for improving human-simulation capabilities. For example, both GRPO and D ITTO achieve
+higher average scores than the strongest baseline, GPT-5.4. D ITTO outperforms GPT-5.4 on
+6 out of 10 tasks and is slightly behind on the remaining 4 tasks. D ITTO also consistently
+outperforms the previous best specialized human-simulation models on all tasks.
+(2) Compared with GRPO, D ITTO achieves an average absolute improvement of 4.8% and
+outperforms GRPO on 8 out of 10 datasets. This demonstrates the effectiveness of our
+learning-from-verbal-feedback algorithm.
+(3) Since our training uses GPT-5-nano as the judge model to provide feedback, we compare
+against GPT-5-nano directly. Our model consistently outperforms GPT-5-nano on all tasks,
+indicating that the improvements mainly come from utilizing judge feedback (e.g., multi-
+dimensional evaluation and error analysis) rather than simply distilling a stronger model.
+Task-wise, we find that D ITTO shows larger gains on more subjective tasks, where verbal
+feedback provides richer guidance (e.g., Sotopia, UserLLM, LifeChoices, and Twinvoice).
+In contrast, the gains are smaller on reasoning-heavy tasks such as Theory-of-Mind tasks.
+This suggests that D ITTO is most effective for tasks with certain behavioral criteria (e.g.,
+standards for achieving certain goals), rather than tasks dominated by logical reasoning.
+
+6.2   Ablation Study
+
+Figure 4 shows an ablation study on the learning algorithm. Specifically, we compare D ITTO
+with the following methods: (1) GRPO; (2) Ditto only (y1 , x ), a variant that only trains
+on (y1 , x ) pairs and removes the loss on (y0 , x ) and (y0 , x + h) pairs; (3) RLTF-SD (Song
+et al., 2026), which use a specific AWR version for advantage calculation; (4) ERL (Shi
+et al., 2026), which uses a supervised fine-tuning objective on y1 instead of RL; and several
+SDPO (Hübotter et al., 2026) variants including (5) SDPO+ token, which combines SDPO
+with token-level loss and the GRPO objective; (6) SDPO+ logits, which combines SDPO with
+logits-level loss and the GRPO objective; (7) SDPO token, i.e., SDPO with token-level loss;
+and (8) SDPO logits, i.e., SDPO with logits-level loss.
+From the results, we observe that D ITTO performs better than GRPO on most sub-metrics,
+especially on auxiliary metrics such as secret. Notably, secret measures whether the agent
+
+
+                                               9
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+         Figure 4: Ablation study on Sotopia, comparing different RL algorithms.
+
+
+
+
+Figure 5: Score delta between the feedback-conditioned teacher response and the original
+student response during training on Sotopia.
+
+
+avoids leaking private information, which is a safety-critical dimension that is not directly
+optimized in the scalar RL reward but can be explicitly addressed through verbal feedback.
+GRPO reduces all multi-dimensional scores into a single scalar reward, which loses infor-
+mation and weakens learning signals for improving minor metrics, while D ITTO can learn
+all dimensions effectively through fine-grained feedback. Compared to different algorithms
+that utilize feedback, we observe that reverse-KL-based methods such as SDPO collapse on
+most metrics except secret. Combining SDPO with GRPO improves performance but still
+performs worse than D ITTO. ERL also underperforms, likely because the lack of reward
+normalization makes learning unstable under noisy feedback. See Appendix B for more
+results. For the following paragraphs, we give more analysis on gap between teacher and
+student, and qualitative analysis of the generated feedback during training.
+
+Teacher-Student Gap Analysis We analyze the score gap between the feedback-
+conditioned teacher response and the original student response on Sotopia. As shown
+in Figure 5, the teacher consistently outperforms the student, and the gap becomes larger
+in later training steps. This suggests that verbal feedback provides useful corrective infor-
+mation, enabling the teacher to generate stronger responses and creating an informative
+learning target for the student. Compared with the ablations, D ITTO maintains a larger and
+
+
+                                             10
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+          Step 10                                                   Step 100
+Dimension Score Feedback                                            Score Feedback
+Goal         1    The score is low because the session ended with- 3     The score was held back because no con-
+                  out any purchase and you never created a path          crete agreement meeting $17.30 happened, even
+                  that could realistically lead Samuel to accept         though you came close by proposing $15 + bonus
+                  your floor. The key omission holding you back is       math. The key omission was: you never found a
+                  that you never used structuring tactics that could     structure that both (a) respects the “cash-only, no
+                  convert “I can’t do $17.3 today” into “OK—can          strings” constraint Samuel demands and (b) guar-
+                  we do X that still lands on $17.3?”                    antees your seller minimum $17.30 in the simplest
+                                                                         terms he can accept in the moment.
+Relationship -1   The score was negative because the exchange 1          Relationship scoring here rewards warmth, trust,
+                  stayed purely adversarial/rigid with repeated          and clarity—showing appreciation without esca-
+                  dismissal. Samuel tried to be respectful and clear     lating into a long, “theatrical” negotiation spiral.
+                  (“I hear you. . . I respect the stance”), but you      A +4/+5 outcome would include: you acknowl-
+                  responded with more cutting language (“Don’t           edge Samuel’s integrity, reduce friction by mak-
+                  waste my time again,” “I’m not here to entertain       ing the deal structure simple, and show willing-
+                  second chances”).                                      ness to walk away respectfully without pressure.
+Knowledge 2       You did learn Samuel’s budget cap (he offered $14 6    You got some of this, but you didn’t lock
+                  and $16) and that he can’t meet $17.3 today, but       down one critical point: whether his refusal
+                  you missed other potentially useful info: timing,      is about price total, about structure, or about
+                  ability to withdraw cash, whether he can arrange       trust/complexity. Without that, you keep propos-
+                  a partial earlier cash + remainder later while still   ing structures that can’t pass his real constraint.
+                  totaling $17.3, or whether he’s willing to buy if
+                  you bundle pickup logistics.
+Believability 7   Believability was solid because you were direct 7      The judge noted you were plausible overall, but
+                  and consistent, but it dipped because of over-         penalized for stylized, escalating bonus schemes
+                  repetition and occasionally overly theatrical or       and repeated “theatrical” logic. Believability im-
+                  lecture-like phrasing (“small miracle,” “lesson        proves when you sound like you’re running a
+                  in markets,” “you’ve made my position clear. . .       transaction like a chef runs service: clear, direct,
+                  done talking to you” repeatedly).                      confident, not overly convoluted.
+Financial    0    Here, no sale occurred, so material outcome was -2     Negative means you likely lost value by failing to
+                  neutral in the rubric. You missed an opportunity       close. You tried to engineer ways to reach $17.30,
+                  to convert “close but short” into a realistic path     but Samuel refused any bonus/credit structures
+                  that lands at $17.3.                                   and also refused your “blended” cash notion.
+
+
+Table 2: Qualitative comparison of verbal feedback on the same Sotopia scenario at different
+training steps.
+
+
+more stable teacher-student gap. In particular, the no-Lfb variant shows an early increase
+but later decline in the gap, suggesting that the teacher does not continue to improve over
+the student without explicitly learning from feedback. This trend is consistent with its
+training curve, where performance improves early but saturates later.
+
+Qualitative Feedback Analysis We further inspect the verbal feedback during training
+with Sotopia tasks as a demonstrating example. As shown in Table 2, the feedback is
+adaptive to the model’s current failure modes. In an early training step, it mainly identifies
+basic negotiation issues, such as repeatedly rejecting low offers, failing to guide the buyer
+toward a concrete commitment, and using overly dismissive language. In a later step on the
+same scenario, after the model adopts more structured negotiation strategies, the feedback
+shifts to finer-grained issues, such as over-complicated bonus or credit schemes, unclear
+buyer constraints, and the lack of a clean closing offer. This suggests that verbal feedback
+provides diagnostic supervision beyond scalar rewards by explaining how the response
+should be improved.
+
+
+7      Conclusion
+
+We introduce D ITTO, a reinforcement learning approach that treats verbal feedback as a first-
+class training signal for human behavior simulation. By generating feedback-conditioned
+improved rollouts and jointly optimizing them with the original outputs, D ITTO enables the
+base policy to internalize rich, actionable guidance without requiring feedback at test time.
+To support this setting, we build S OUL, a unified training and evaluation suite spanning 10
+tasks across six categories of human simulation. Experiments show that verbal feedback
+substantially improves performance over standard GRPO, especially on generative and
+multi-turn tasks, while also improving training efficiency and safety-related behaviors.
+
+
+                                                          11
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+Together, our results suggest that moving beyond scalar rewards toward richer feedback is
+a promising direction for training more human-like simulators.
+
+Acknowledgments
+This work was in part funded by the National Institute of Standards and Technology
+(ROR: 05xpvk416) under Federal Award ID Number 60NANB24D231 and Carnegie Mellon
+University (ROR: 05x2bcf33) AI Measurement Science and Engineering Center (AIMSEC).
+
+References
+Mohammad Aliannejadi, Hamed Zamani, Fabio Crestani, and W Bruce Croft. Asking
+ clarifying questions in open-domain information-seeking conversations. In Proceedings of
+ the 42nd International ACM SIGIR Conference on Research and Development in Information
+ Retrieval, pp. 475–484, 2019.
+Mohammad Aliannejadi, Julia Kiseleva, Aleksandr Chuklin, Jeff Dalton, and Mikhail Burt-
+ sev. Building and evaluating open-domain dialogue corpora with clarifying questions. In
+ Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing, pp.
+ 4473–4484, 2021.
+Nicolas Bougie and Narimasa Watanabe. Simuser: Simulating user behavior with large
+  language models for recommender system evaluation. In Annual Meeting of the Association
+  for Computational Linguistics, 2025. URL https://aclanthology.org/2025.acl-industry.
+  5/.
+Sam Davidson, Salvatore Romeo, Raphael Shu, James Gung, Arshit Gupta, Saab Mansour,
+  and Yi Zhang. User simulation with large language models for evaluating task-oriented
+  dialogue. arXiv preprint arXiv:2309.13233, 2023. URL https://arxiv.org/abs/2309.13233.
+DeepSeek-AI. Deepseek-r1: Incentivizing reasoning capability in llms via reinforcement
+ learning. arXiv preprint arXiv:2501.12948, 2025. URL https://arxiv.org/abs/2501.12948.
+Yao Dou, Michel Galley, Baolin Peng, Chris Kedzie, Weixin Cai, Alan Ritter, Chris Quirk,
+  Wei Xu, and Jianfeng Gao. Simulatorarena: Are user simulators reliable proxies for multi-
+  turn evaluation of AI assistants? In Conference on Empirical Methods in Natural Language
+  Processing, 2025. URL https://arxiv.org/abs/2510.05444.
+Bangde Du, Minghao Guo, Songming He, Ziyi Ye, Xi Zhu, Weihang Su, Shuqi Zhu,
+  Yujia Zhou, Yongfeng Zhang, Qingyao Ai, and Yiqun Liu. TwinVoice: A multi-
+  dimensional benchmark towards digital twins via LLM persona simulation. arXiv preprint
+  arXiv:2510.25536, 2025. URL https://arxiv.org/abs/2510.25536.
+Chengyu Du, Xintao Wang, Aili Chen, Weiyuan Li, Rui Xu, Junteng Liu, Zishan Huang,
+ Rong Tian, Zijun Sun, Yuhao Li, Liheng Feng, Deming Ding, Pengyu Zhao, and Yanghua
+ Xiao. Her: Human-like reasoning and reinforcement learning for llm role-playing. ArXiv,
+ abs/2601.21459, 2026.
+Ashutosh Hathidara, Julien Yu, Vaishali Senthil, Sebastian Schreiber, and Anil Babu Ankiset-
+  tipalli. MirrorBench: A benchmark to evaluate conversational user-proxy agents for
+  human-likeness. arXiv preprint arXiv:2601.08118, 2026. URL https://arxiv.org/abs/
+  2601.08118.
+Yinghui He, Yufan Wu, Yilin Jia, Rada Mihalcea, Yulong Chen, and Naihao Deng. HI-TOM:
+  A benchmark for evaluating higher-order theory of mind reasoning in large language
+  models. arXiv preprint arXiv:2310.16755, 2024. URL https://arxiv.org/abs/2310.16755.
+Jonas Hübotter, Frederike Lübeck, Lejs Behric, Anton Baumann, Marco Bagatella, Daniel
+  Marta, Ido Hakimi, Idan Shenfeld, Thomas Kleine Buening, Carlos Guestrin, and Andreas
+  Krause. Reinforcement learning via self-distillation. arXiv preprint arXiv:2601.20802, 2026.
+  URL https://arxiv.org/abs/2601.20802.
+
+
+                                             12
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+Jonas Hubotter, Frederike Lubeck, Lejs Deen Behric, Anton Baumann, Marco Bagatella,
+  Daniel Marta, Ido Hakimi, Idan Shenfeld, Thomas Kleine Buening, Carlos Guestrin, and
+  Andreas Krause. Reinforcement learning via self-distillation. ArXiv, abs/2601.20802,
+  2026.
+Liwei Jiang, Yuanjun Chai, Margaret Li, Mickel Liu, Raymond Fok, Nouha Dziri, Yulia
+  Tsvetkov, Maarten Sap, Alon Albalak, and Yejin Choi. Artificial hivemind: The open-
+  ended homogeneity of language models (and beyond). arXiv preprint arXiv:2510.22954,
+  2025. URL https://arxiv.org/abs/2510.22954.
+Chuanyang Jin, Yutong Wu, Jing Cao, Jiannan Xiang, Yen-Ling Kuo, Zhiting Hu, Tomer
+ Ullman, Antonio Torralba, Joshua B Tenenbaum, and Tianmin Shu. MMToM-QA: Multi-
+ modal theory of mind question answering. In Proceedings of the 62nd Annual Meeting of the
+ Association for Computational Linguistics, 2024. URL https://arxiv.org/abs/2401.08743.
+Hyunwoo Kim, Melanie Sclar, Xuhui Zhou, Ronan Le Bras, Gunhee Kim, Yejin Choi, and
+ Maarten Sap. FANToM: A benchmark for stress-testing machine theory of mind in
+ interactions. In Proceedings of the 2023 Conference on Empirical Methods in Natural Language
+ Processing, 2023. URL https://arxiv.org/abs/2310.15421.
+Andreas Köpf, Yannic Kilcher, Dimitri von Rütte, Sotiris Anagnostidis, Zhi Rui Tam, Keith
+ Stevens, Abdullah Barhoum, Duc Minh Nguyen, Oliver Stanley, Richárd Nagyfi, et al.
+ OpenAssistant conversations – democratizing large language model alignment. In Ad-
+ vances in Neural Information Processing Systems, 2023.
+Xiujun Li, Zachary C. Lipton, Bhuwan Dhingra, Lihong Li, Jianfeng Gao, and Yun-Nung
+  Chen. A user simulator for task-completion dialogues. arXiv preprint arXiv:1612.05688,
+  2016. URL https://arxiv.org/abs/1612.05688.
+Hao Liu, Carmelo Sferrazza, and Pieter Abbeel. Chain of hindsight aligns language models
+ with feedback. In International Conference on Learning Representations, 2024. URL https:
+ //arxiv.org/abs/2302.02676.
+Aman Madaan, Niket Tandon, Prakhar Gupta, Skyler Hallinan, Luyu Gao, Sarah Wiegr-
+ effe, Uri Alon, Nouha Dziri, Shrimai Prabhumoye, Yiming Yang, Shashank Gupta, Bod-
+ hisattwa Prasad Majumder, Katherine Hermann, Sean Welleck, Amir Yazdanbakhsh, and
+ Peter Clark. Self-refine: Iterative refinement with self-feedback. In Advances in Neural
+ Information Processing Systems, 2023. URL https://arxiv.org/abs/2303.17651.
+Tarek Naous, Philippe Laban, Wei Xu, and Jennifer Neville. Flipping the dialogue: Training
+  and evaluating user language models. arXiv preprint arXiv:2510.06552, 2025. URL https:
+  //arxiv.org/abs/2510.06552.
+Clifford Nass and Youngme Moon. Machines and mindlessness: Social responses to com-
+  puters. Journal of Social Issues, 56(1):81–103, 2000.
+Aida Nematzadeh, Kaylee Burns, Erin Grant, Alison Gopnik, and Thomas L. Griffiths.
+  Evaluating theory of mind in question answering, 2018. URL https://arxiv.org/abs/
+  1808.09352.
+Byung-Doh Oh and Tal Linzen. To model human linguistic prediction, make LLMs less
+  superhuman. arXiv preprint arXiv:2510.05141, 2025. URL https://arxiv.org/abs/2510.
+  05141.
+Long Ouyang, Jeffrey Wu, Xu Jiang, Diogo Almeida, Carroll L. Wainwright, Pamela Mishkin,
+  Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, et al. Training language
+  models to follow instructions with human feedback. Advances in Neural Information
+  Processing Systems, 35, 2022. URL https://arxiv.org/abs/2203.02155.
+Xue Bin Peng, Aviral Kumar, Grace Zhang, and Sergey Levine. Advantage-weighted
+  regression: Simple and scalable off-policy reinforcement learning. ArXiv, abs/1910.00177,
+  2019.
+
+
+                                             13
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+Rafael Rafailov, Archit Sharma, Eric Mitchell, Stefano Ermon, Christopher D. Manning,
+  and Chelsea Finn. Direct preference optimization: Your language model is secretly a
+  reward model. Advances in Neural Information Processing Systems, 36, 2023. URL https:
+  //arxiv.org/abs/2305.18290.
+
+Ruiyang Ren, Peng Qiu, Yingqi Qu, Jing Liu, Wayne Xin Zhao, Hua Wu, Ji-Rong Wen, and
+  Haifeng Wang. Bases: Large-scale web search user simulation with large language model
+  based agents. In Findings of the Association for Computational Linguistics: EMNLP, 2024.
+  URL https://arxiv.org/abs/2402.17505.
+
+Alexis Ross and Jacob Andreas. Learning to make MISTAKEs: Modeling incorrect student
+  thinking and key errors. arXiv preprint arXiv:2510.11502, 2025. URL https://arxiv.org/
+  abs/2510.11502.
+
+Vinay Samuel, Henry Peng Zou, Yue Zhou, Shreyas Chaudhari, Ashwin Kalyan, Tanmay
+  Rajpurohit, Ameet Deshpande, Karthik Narasimhan, and Vishvak Murahari. Personagym:
+  Evaluating persona agents and llms. In Findings of the Association for Computational
+  Linguistics: EMNLP, 2025. URL https://arxiv.org/abs/2407.18416.
+
+Jost Schatzmann, Karl Weilhammer, Matt Stuttle, and Steve Young. A survey of statistical
+  user simulation techniques for reinforcement-learning of dialogue management strategies.
+  The Knowledge Engineering Review, 21(2):97–126, 2006. URL https://doi.org/10.1017/
+  S0269888906000944.
+
+Jérémy Scheurer, Jon Ander Campos, Tomasz Korbak, Jun Shern Chan, Angelica Chen,
+   Kyunghyun Cho, and Ethan Perez. Training language models with language feedback at
+   scale. Transactions on Machine Learning Research, 2023. URL https://arxiv.org/abs/2303.
+   16755.
+
+Samuel Schmidgall, Rojin Ziaei, Carl Harris, Eduardo Reis, Jeffrey Jopling, and Michael
+  Moor. Agentclinic: a multimodal agent benchmark to evaluate ai in simulated clinical
+  environments, 2024. URL https://arxiv.org/abs/2405.07960.
+
+Melanie Sclar, Sachin Kumar, Peter West, Alane Suhr, Yejin Choi, and Yulia Tsvetkov.
+ Minding language models’ (lack of) theory of mind: A plug-and-play multi-character
+ belief tracker. arXiv preprint arXiv:2306.00924, 2023. URL https://arxiv.org/abs/2306.
+ 00924.
+
+Ivan Sekulic, Silvia Terragni, Victor Guimaraes, Nghia Khau, Bruna Guedes, Modestas
+  Filipavicius, Andre Ferreira Manso, and Roland Mathis. Reliable llm-based user simulator
+  for task-oriented dialogue systems. In Proceedings of the 1st Workshop on Simulating
+  Conversational Intelligence in Chat (SCI-CHAT), 2024. URL https://arxiv.org/abs/2402.
+  13374.
+
+Preethi Seshadri, Samuel Cahyawijaya, Ayomide Odumakinde, Sameer Singh, and
+  Seraphina Goldfarb-Tarrant. Lost in simulation: Llm-simulated users are unreliable
+  proxies for human users in agentic evaluations. arXiv preprint arXiv:2601.17087, 2026.
+  URL https://arxiv.org/abs/2601.17087.
+
+Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu, Junxiao Song, Mingchuan Zhang,
+ Y.K. Li, Y. Wu, and Daya Guo. Deepseekmath: Pushing the limits of mathematical
+  reasoning in open language models. arXiv preprint arXiv:2402.03300, 2024. URL https:
+ //arxiv.org/abs/2402.03300.
+
+Idan Shenfeld, Mehul Damani, Jonas Hübotter, and Pulkit Agrawal. Self-distillation enables
+  continual learning. ArXiv, abs/2601.19897, 2026.
+
+Taiwei Shi, Sihao Chen, Bowen Jiang, Linxin Song, Longqi Yang, and Jieyu Zhao. Ex-
+  periential reinforcement learning. arXiv preprint arXiv:2602.13949, 2026. URL https:
+  //arxiv.org/abs/2602.13949.
+
+
+                                            14
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+Noah Shinn, Federico Cassano, Edward Berman, Ashwin Gopinath, Karthik Narasimhan,
+ and Shunyu Yao. Reflexion: Language agents with verbal reinforcement learning. In
+ Advances in Neural Information Processing Systems, 2023. URL https://arxiv.org/abs/
+ 2303.11366.
+
+Yuda Song, Lili Chen, Fahim Tajwar, Rémi Munos, Deepak Pathak, J. Andrew Bagnell, Aarti
+  Singh, and Andrea Zanette. Expanding the capabilities of reinforcement learning via
+  text feedback. arXiv preprint arXiv:2602.02482, 2026. URL https://arxiv.org/abs/2602.
+  02482.
+
+Weiwei Sun, Shuo Zhang, Krisztian Balog, Zhaochun Ren, Pengjie Ren, Zhumin Chen,
+ and Maarten de Rijke. Simulating user satisfaction for the evaluation of task-oriented
+ dialogue systems. Proceedings of the 44th International ACM SIGIR Conference on Research
+ and Development in Information Retrieval, 2021. URL https://dl.acm.org/doi/10.1145/
+ 3404835.3463241.
+
+Weiwei Sun, Shuyu Guo, Shuo Zhang, Pengjie Ren, Zhumin Chen, M. de Rijke, and
+ Zhaochun Ren. Metaphorical user simulators for evaluating task-oriented dialogue
+ systems. ACM Transactions on Information Systems, 42:1 – 29, 2022.
+
+Weiwei Sun, Xuhui Zhou, Weihua Du, Xingyao Wang, Sean Welleck, Graham Neubig,
+ Maarten Sap, and Yiming Yang. Training proactive and personalized llm agents. arXiv
+ preprint arXiv:2511.02208, 2025. URL https://arxiv.org/abs/2511.02208.
+
+Lindia Tjuatja, Valerie Chen, Tongshuang Wu, Ameet Talwalkar, and Graham Neubig. Do
+  llms exhibit human-like response biases? a case study in survey design. Transactions of the
+  Association for Computational Linguistics, 12:1011–1026, 2024.
+
+Michael Tomasello. Becoming Human: A Theory of Ontogeny. Harvard University Press,
+ Cambridge, MA, 2019. ISBN 9780674248281.
+
+Vladimir Vapnik and Akshay Vashist. A new learning paradigm: Learning using privileged
+  information. Neural Networks, 22(5-6):544–557, 2009. URL https://doi.org/10.1016/j.
+  neunet.2009.06.042.
+
+Vladimir Naumovich Vapnik and Rauf Izmailov. Learning using privileged information:
+  similarity control and knowledge transfer. J. Mach. Learn. Res., 16:2023–2049, 2015.
+
+Lei Wang, Jingsen Zhang, Hao Yang, Zhi-Yuan Chen, Jiakai Tang, Zeyu Zhang, Xu Chen,
+  Yankai Lin, Ruihua Song, Wayne Xin Zhao, Jun Xu, Zhicheng Dou, Jun Wang, and Ji rong
+  Wen. User behavior simulation with large language model-based agents. ACM Transactions
+  on Information Systems, 2025. URL https://dl.acm.org/doi/10.1145/3708985.
+
+Xintao Wang, Heng Wang, Yifei Zhang, Xinfeng Yuan, Rui Xu, Jen tse Huang, Siyu Yuan,
+  Haoran Guo, Jiangjie Chen, Shuchang Zhou, Wei Wang, and Yanghua Xiao. Coser:
+  A comprehensive literary dataset and framework for training and evaluating llm role-
+  playing and persona simulation, 2026. URL https://arxiv.org/abs/2502.09082.
+
+Shirley Wu, Evelyn Choi, Arpandeep Khatua, Zhanghan Wang, Joy He-Yueya,
+  Tharindu Cyril Weerasooriya, Wei Wei, Diyi Yang, Jure Leskovec, and James Zou. Hu-
+  manlm: Simulating users with state alignment beats response imitation, 2026. URL
+  https://arxiv.org/abs/2603.03303.
+
+Zeqiu Wu, Yushi Hu, Weijia Shi, Nouha Dziri, Alane Suhr, Prithviraj Ammanabrolu, Noah A.
+  Smith, Mari Ostendorf, and Hannaneh Hajishirzi. Fine-grained human feedback gives
+  better rewards for language model training. In Advances in Neural Information Processing
+  Systems, 2023. URL https://arxiv.org/abs/2306.01693.
+
+Rui Xu, Xintao Wang, Jiangjie Chen, Siyu Yuan, Xinfeng Yuan, Jiaqing Liang, Zulong Chen,
+  Xiaoqing Dong, and Yanghua Xiao. Character is destiny: Can role-playing language
+  agents make persona-driven decisions? 2024a.
+
+
+                                             15
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+Rui Xu, Xintao Wang, Jiangjie Chen, Siyu Yuan, Xinfeng Yuan, Jiaqing Liang, Zulong Chen,
+  Xiaoqing Dong, and Yanghua Xiao. Character is destiny: Can role-playing language
+  agents make persona-driven decisions? arXiv preprint arXiv:2404.12138, 2024b. URL
+  https://arxiv.org/abs/2404.12138.
+Tianzhu Ye, Li Dong, Xun Wu, Shaohan Huang, and Furu Wei. On-policy context distillation
+  for language models. ArXiv, abs/2602.12275, 2026.
+Haofei Yu, Zhengyang Qi, Yining Zhao, Kolby Nottingham, Keyang Xuan, Bod-
+ hisattwa Prasad Majumder, Hao Zhu, Paul Pu Liang, and Jiaxuan You. Sotopia-rl:
+ Reward design for social intelligence. arXiv preprint arXiv:2508.03905, 2025. URL
+ https://arxiv.org/abs/2508.03905.
+Weizhe Yuan, Richard Yuanzhe Pang, Kyunghyun Cho, Xian Li, Sainbayar Sukhbaatar, Jing
+ Xu, and Jason Weston. Self-rewarding language models. In International Conference on
+ Machine Learning, 2024. URL https://arxiv.org/abs/2401.10020.
+Erhan Zhang, Xingzhu Wang, Peiyuan Gong, Yankai Lin, and Jiaxin Mao. Usimagent:
+  Large language models for simulating search users. Proceedings of the 47th International
+  ACM SIGIR Conference on Research and Development in Information Retrieval, 2024. URL
+  https://arxiv.org/abs/2403.09142.
+Xiaoying Zhang, Yipeng Zhang, Hao Sun, Kaituo Feng, Chaochao Lu, Chao Yang, and Helen
+  Meng. Critique-grpo: Advancing llm reasoning with natural language and numerical feed-
+  back. arXiv preprint arXiv:2506.03106, 2025. URL https://arxiv.org/abs/2506.03106.
+Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Siyuan Zhuang, Zhanghao Wu, Yonghao
+  Zhuang, Zi Lin, Zhuohan Li, Dacheng Li, Eric P Xing, et al. Judging llm-as-a-judge
+  with mt-bench and chatbot arena. In Advances in Neural Information Processing Systems,
+  volume 36, 2023. URL https://arxiv.org/abs/2306.05685.
+Xuhui Zhou, Hao Zhu, Leena Mathur, Ruohong Zhang, Haofei Yu, Zhengyang Qi, Louis-
+  Philippe Morency, Yonatan Bisk, Daniel Fried, Graham Neubig, and Maarten Sap. SO-
+ TOPIA: Interactive evaluation for social intelligence in language agents. In The Twelfth
+  International Conference on Learning Representations, 2024. URL https://openreview.net/
+  forum?id=mM7VurbA4r.
+Xuhui Zhou, Hyunwoo Kim, Faeze Brahman, Liwei Jiang, Hao Zhu, Ximing Lu, Frank F.
+ Xu, Bill Yuchen Lin, Yejin Choi, Niloofar Mireshghallah, Ronan Le Bras, and Maarten Sap.
+  HAICOSYSTEM: An ecosystem for sandboxing safety risks in human-ai interactions. In
+ Second Conference on Language Modeling, 2025. URL https://arxiv.org/abs/2409.16427.
+Xuhui Zhou, Jiarui Liu, Akhila Yerukola, Hyunwoo Kim, and Maarten Sap. Social world
+  models, 2026a. URL https://arxiv.org/abs/2509.00559.
+Xuhui Zhou, Weiwei Sun, Qianou Ma, Yiqing Xie, Jiarui Liu, Weihua Du, Sean Welleck,
+ Yiming Yang, Graham Neubig, Sherry Tongshuang Wu, and Maarten Sap. Mind the
+  sim2real gap in user simulation for agentic tasks, 2026b. URL https://arxiv.org/abs/
+  2603.11245.
+
+
+A    Appendix
+
+Limitations. Our approach has several limitations. First, we rely on LLM judges as
+proxies for human judgment; while jury averaging reduces variance, it does not eliminate
+systematic biases shared across all judges. Second, our evaluation is limited to English-
+language benchmarks and may not generalize to other languages or cultural contexts.
+Third, the training pipeline requires running K judges on N candidates per context, which
+incurs significant computational cost. Finally, our theoretical variance-reduction guarantees
+assume uncorrelated judge errors, which is an idealization—in practice, LLM judges may
+share correlated failure modes.
+
+
+                                             16
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+                            Figure 6: Training results on Sotopia
+
+
+
+
+                           Figure 7: Training results on UserLLM
+
+
+
+Future Work. Promising directions include (1) incorporating human feedback to correct
+shared judge biases, (2) extending to multilingual and cross-cultural social simulation,
+(3) developing more efficient jury mechanisms (e.g., adaptive judge selection), and (4)
+exploring whether the social reasoning capabilities learned through our approach transfer
+to downstream agent tasks.
+
+
+
+B   Training Curve
+
+See Figure 6, Figure 7, and Figure 8 for training curves. See Table 3 for the complete baseline
+results.
+
+
+                                              17
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+                          Figure 8: Training results on Soul tasks
+
+                         GPT-5 Sotopia-RL HumanLM HER Coser Base GRPO D ITTO
+ Benchmark     GPT-5.4
+                         nano      7B        8B   32B  8B    8B   8B    8B
+ FanToM         0.900    0.720     0.150           0.780   0.550   0.030   0.780   0.940   0.950
+ HiToM          0.700    0.370     0.320           0.510   0.560   0.020   0.580   0.770   0.780
+ ToMi           0.880    0.850     0.610           0.720   0.630   0.430   0.680   0.820   0.930
+ CoSER          0.659    0.352     0.296           0.227   0.419   0.305   0.435   0.541   0.512
+ LifeChoices    0.870    0.600     0.670           0.660   0.750   0.520   0.670   0.690   0.800
+ Sotopia        0.300    0.310     0.312           0.275   0.290   0.241   0.277   0.423   0.470
+ Mistakes       0.570    0.580     0.180           0.520   0.350   0.000   0.460   0.580   0.560
+ MirrorBench    0.536    0.358     0.367           0.481   0.361   0.314   0.547   0.683   0.713
+ UserLLM        0.575    0.324     0.404           0.318   0.537   0.420   0.469   0.863   0.930
+ TwinVoice      0.640    0.230     0.340           0.380   0.390   0.070   0.430   0.470   0.610
+ Average        0.663    0.469     0.365           0.487   0.484   0.235   0.533   0.678   0.726
+
+Table 3: Main results on S OUL tasks. We report the primary metric for each benchmark
+(higher is better). For Sotopia, we report the normalized eval avg score. Base denotes the
+base model, Qwen3-VL-8B-Instruct. Bold indicates the best result in each row.
+
+
+C     S OUL Task Details
+
+This appendix provides full descriptions, evaluation protocols, and examples for each of the
+10 S OUL tasks. Table 4 summarizes all tasks, and Table 6 details the training data sources.
+Table 5 surveys human-validation studies for benchmarks using LLM-as-judge evaluation.
+
+C.1   Theory of Mind
+
+FanToM (Kim et al., 2023) stress-tests Theory of Mind in information-asymmetric multi-
+party conversations. Characters join and leave conversations at different points, creating nat-
+ural knowledge gaps. The benchmark poses 1,086 questions across three categories—belief,
+answerability, and information accessibility—in both multiple-choice and free-response
+formats.
+
+HiToM (He et al., 2024) evaluates higher-order Theory of Mind reasoning, requiring
+models to reason about nested beliefs (e.g., “Alice thinks that Bob thinks the object is in
+location X”). Scenarios include deception and varying communication patterns (private vs.
+public).
+
+
+                                              18
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+Table 4: S OUL evaluation tasks. Each row lists the task, a brief description, evaluation
+format, number of test instances, and primary metric.
+ Benchmark             Task                                           Format             # Test    Metric
+ Theory of Mind
+ FanToM                ToM in multi-party conversations               MCQ + QA           1,086     Accuracy
+ HiToM                 Higher-order nested belief tracking            MCQ                  100     Accuracy
+ ToMi                  False-belief QA with paraphrased stories       QA                   600     Accuracy
+ Character Role Play
+ CoSER (ID/OOD)        Literary character dialogue                    Multi-turn gen.      200     LLM judge
+ LifeChoices           Persona-driven character decisions             MCQ (4-way)          600     Accuracy
+ Social Skill
+ Sotopia               Social interaction with goals                  Multi-agent int.     100     LLM judge
+ Learner Simulation
+ Mistakes              Select answer matching a misconception         MCQ (4-way)          600     Accuracy
+ User Simulation
+ MirrorBench           Generate human-like user turns                 Multi-turn gen       795     LLM judge
+ UserLLM               Generate user turns (multi-metric)             Single-turn gen    1,800     Multi-metric
+ Persona Simulation
+ TwinVoice             Select answer matching the user’s persona      MCQ (4-way)        5,687     Accuracy
+
+
+
+Table 5: Human evaluation validation for benchmarks using LLM-as-judge. We report
+whether each benchmark conducted a human study to validate its LLM judge, the study
+design, and the reported agreement. Benchmarks using only automatic metrics (accuracy,
+substring match, etc.) are omitted.
+   Benchmark            Human Study De-                Agreement                                  Validated?
+                        sign
+   CoSER                60 samples, 3 annota-          68.6% (GPT-4o), 77.5% (DeepSeek-           ✓
+                        tors, 1–10 scale               R1) alignment with human judges
+   Sotopia              Pearson correlation            GPT-4 validated as proxy; strongest        ✓
+                        with human labels              on goal completion, finances, rela-
+                        across 7 dimensions            tionships
+   MirrorBench          100 episodes per met-          GTEval: strong; Pairwise Indistin-         ✓
+                        ric, stratified, blinded       guishability: moderate (Spearman ρ,
+                        annotators                     Pearson r, Kendall τ; all p ≪ 0.001)
+   UserLLM (NQ)         None reported                  GPT-4o used as judge; no human             ×
+                                                       correlation or agreement metrics re-
+                                                       ported
+
+
+ToMi (Nematzadeh et al., 2018) is one of the most classic tests of Theory of Mind. We use
+the more challenging version by Sclar et al. (2023), which extends the paradigm through
+diverse paraphrasing of ToMi narratives. By varying surface forms of identical scenarios, it
+tests whether models exhibit robust Theory of Mind reasoning rather than exploiting shallow
+textual cues. We evaluate on 600 questions covering reality, memory, and first/second-order
+belief.
+
+C.2   Character Role Play
+
+CoSER (Wang et al., 2026) is a literary character role-playing benchmark built from 771
+books containing 17,966 characters. Using a “given-circumstance acting” methodology
+inspired by theater, models must simulate multi-turn dialogues as literary characters in
+specified narrative settings. Evaluation uses LLM judges that identify specific flaws across
+four dimensions—Storyline Consistency, Anthropomorphism, Character Fidelity, and Sto-
+ryline Quality—with severity ratings from 1 to 5. We evaluate on both in-distribution (ID,
+100 conversations from seen books) and out-of-distribution (OOD, 100 conversations from
+unseen books) splits (see Section C.7 for the full generation protocol, scoring formula, and
+examples).
+
+
+                                                         19
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+                                  Table 6: S OUL training data sources.
+ Category              Benchmark      Data Source                   Format                            Size
+                       FanToM         Train split                   MCQ context                         –
+ Theory of Mind        HiToM          Augmented                     MCQ context                         –
+                       ToMi           Train split                   QA context                          –
+                       CoSER          Train books                   Multi-turn                          –
+ Character Role Play
+                       LifeChoices    Train split                   MCQ context                         –
+ Social Skill          Sotopia        Scenario pool                 Multi-agent                         –
+ Learner Sim.          Mistakes       Train split                   MCQ context                         –
+                       MirrorBench    Held-out episodes             Multi-turn                          –
+ User Sim.
+                       UserLLM        Train split                   Single-turn                         –
+                                      Bluesky user posts            Persona histories + MCQ (4-way)   471
+ Persona Sim.          TwinVoice      Pushshift Telegram messages   Persona histories + MCQ (4-way)   384
+                                      Project Gutenberg novels      Persona histories + MCQ (4-way)   480
+
+
+
+LifeChoices (Xu et al., 2024a) evaluates persona-driven decision making for literary char-
+acters. Given a character biography, scenario, and candidate options, the model must predict
+the decision that best matches the character’s original choice in the narrative. The dataset
+contains 1,462 decision points from 388 novels; we evaluate on 600 tasks using accuracy (see
+Section C.8 for task format, context length statistics, and examples).
+
+C.3   Social Skill
+
+Sotopia (Zhou et al., 2024) evaluates social interaction through two-agent simulations in
+realistic scenarios. Each agent receives a character background, social goals, and relationship
+context. Performance is measured across seven dimensions—believability, relationship,
+knowledge, secret-keeping, social rules, financial outcomes, and goal achievement—scored
+by LLM judges.
+
+C.4   Learner Simulation
+
+Mistakes (Ross & Andreas, 2025) evaluates whether LLMs can simulate incorrect student
+reasoning in K-12 mathematics. Given a multiple-choice math problem and a misconception
+description, models must select the wrong answer that corresponds to that specific miscon-
+ception. This tests a key aspect of user simulation: faithfully reproducing systematic human
+errors.
+
+C.5   User Simulation
+
+MirrorBench (Hathidara et al., 2026) evaluates user-proxy agents on producing human-
+like utterances, decoupled from downstream task success. Given an extracted user goal,
+the model iteratively generates all user turns in a conversation while assistant responses
+are replayed from the original data. Each generated turn is compared against the real
+human utterance. Evaluation uses both lexical diversity metrics (MATTR, Yule’s K, HD-D)
+and LLM-judge metrics, calibrated against human-human and proxy-proxy baselines. We
+evaluate on four subsets: ChatbotArena, ClariQ, OASST1, and QuLAC (see Section C.9 for
+detailed dataset statistics and examples).
+
+UserLLM (Naous et al., 2025) evaluates single-turn user utterance generation. Given a
+conversation context and a user intent, the model generates one user turn. We evaluate
+on three test sets, each targeting different metrics (see Section C.10 for detailed metric
+definitions and examples):
+
+      • CSQA (Role Adherence): The model plays a user who asks a commonsense ques-
+        tion. Role adherence is measured by a substring-matching rule: the answer-choice
+        texts are normalized and checked against the generated turn. If the turn contains
+
+
+                                                      20
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+        one or two (but not all) of the answer choices, it scores 0—the model is leaking
+        specific answers rather than staying in the questioner role. If it mentions none, it
+        scores 1.
+      • NQ (Intent Adherence): The model plays a user asking a factoid question. Intent
+        adherence is measured by an LLM judge that classifies whether the generated turn
+        refuses to answer the question (as a real user would) or inappropriately provides
+        the answer itself.
+      • PRISM (Multi-metric): The model generates first turns from high-level intents.
+        Four metrics are computed: first-turn diversity (pairwise 1-gram Jaccard distance
+        across generations), intent decomposition (1-gram overlap between intent keywords
+        and the generated turn), termination F1 (whether the model correctly predicts con-
+        versation ending), and AI detector score (whether the text passes an AI-detection
+        classifier as human-written).
+
+C.6   Persona Simulation
+
+TwinVoice (Du et al., 2025) is a multi-dimensional benchmark for persona simulation
+spanning Social Persona, Interpersonal Persona, and Narrative Persona. Given a persona
+history and a new stimulus problem, the model must identify the response that best matches
+the target persona in a discriminative 4-way multiple-choice task. The benchmark contains
+5,687 test instances in total and reports accuracy, while also organizing examples around six
+fine-grained capabilities, including opinion consistency, memory recall, logical reasoning,
+lexical fidelity, persona tone, and syntactic style.
+
+C.7   CoSER
+
+CoSER (Wang et al., 2026) is a literary character role-playing benchmark built from 771 books
+containing 17,966 characters. Using a “given-circumstance acting” (GCA) methodology
+inspired by theater, models must simulate multi-turn dialogues as literary characters in
+specified narrative settings. We describe the generation protocol, evaluation metrics, and
+dataset details below.
+
+Generation protocol. Each task (called a circumstance) specifies a scene from a book,
+including: (1) a scenario describing the setting, atmosphere, and dramatic tension; (2) a
+plot summary providing narrative context; (3) detailed character profiles for each speaking
+character; and (4) character motivations (inner thoughts and goals). The model must
+simulate a multi-character conversation in this setting.
+The actor model under evaluation plays all characters in the conversation—the same LLM
+sequentially portrays each character c ∈ C in the given setting. Two auxiliary agents support
+the simulation:
+
+• Character agents (actor model): One instantiation per speaking character. Each receives
+  the scenario, its own profile and motivation, and the profiles of other characters. It
+  generates dialogue in the format [inner thought] speech (action).
+• Environment agent (auxiliary): Describes environmental changes and minor character
+  reactions based on the ongoing dialogue (e.g., crowd murmurs, weather shifts).
+• Next-speaker predictor (NSP) (auxiliary): After each turn, predicts which character
+  speaks next (or outputs <END CHAT> to terminate). Termination requires a minimum of 5
+  rounds.
+
+Conversations run for up to 20 rounds. In practice, the NSP terminates most conversations
+earlier (mean: 14.2 character turns, range: 6–20).
+The generated conversation is then compared against the ground-truth dialogue from the
+original book, which serves as the reference for evaluation.
+
+Evaluation protocol. Evaluation combines LLM-based flaw detection with automatic
+lexical metrics. For each of four dimensions, an LLM judge (acting as a “literary critic”)
+
+
+                                             21
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+receives the full context—book title, plot summary, scenario, character profiles, the reference
+conversation, and the dimension-specific evaluation criteria—and identifies specific flaws in
+the simulated conversation. Each flaw is assigned a severity from 1 (minor) to 5 (severe).
+The per-dimension score is computed as:
+                                                                            
+          score = max 0, min 100 − (total severity − 0.3 × Nturns ) × 5, 100
+where Nturns is the number of character turns in the simulation. The 0.3 × Nturns term
+provides a length-based tolerance: longer conversations are expected to accumulate more
+minor flaws. The overall reward is the mean of four dimension scores, normalized to [0, 1].
+Additionally, BLEU and ROUGE-L are computed against the reference dialogue, though
+these are typically low (BLEU ≈ 0.02) since valid simulations can differ substantially in
+wording from the original.
+
+Evaluation dimensions. The four dimensions capture different facets of role-playing
+quality:
+
+• Storyline Consistency: Whether characters’ reactions (emotions, attitudes, behaviors)
+  align with those in the reference conversation. Detects deviations from the original
+  dramatic arc.
+• Anthropomorphism: How human-like and natural characters behave. Checks for: self-
+  identity (goals, decisions, preferences vs. “helpful AI assistant” behavior), emotional
+  depth (psychological complexity, use of subtext), persona coherence (consistent personal-
+  ity), and social interaction (understanding of others, contextual reactions).
+• Character Fidelity: How well characters match their established profiles from the book.
+  Evaluated only for major characters. Checks: appropriate language/vocabulary for the
+  character’s background, character-specific knowledge, personality-consistent emotions
+  and behaviors, and appropriate social dynamics given relationships and status.
+• Storyline Quality: Logical consistency and narrative quality. Checks: natural flow and
+  progression (no verbosity, redundancy, or repetition), and factual consistency between
+  statements.
+
+Human validation. The original paper validates the LLM-based evaluation against human
+judgments. Three annotators scored 7 representative LLMs on 60 samples using a 1–10
+scale. Human rankings generally align with LLM-judged scores: CoSER-70B ranks highest
+under both human (6.78 avg, 86.9% win rate) and LLM evaluation. The full GCA evaluation
+protocol achieves 68.6% alignment with human judges (GPT-4o as critic); DeepSeek-R1 as
+critic achieves 77.5%. Ablation analysis shows all GCA components contribute: removing
+reference dialogues, scoring rubrics, length correction, or dimension separation each reduces
+alignment. Interestingly, simple n-gram metrics (BLEU: 75.3%, ROUGE-L: 72.0%) achieve
+competitive alignment with LLM judges, though they cannot capture the nuanced flaw-level
+feedback that GCA provides.
+
+Datasets.   We evaluate on two splits. Table 7 summarizes their structure.
+
+
+                              Table 7: CoSER dataset statistics.
+ Split                       # Tasks   Avg GT turns                                 Description
+ ID (in-distribution)           100             14.2   Scenarios from books seen during training
+ OOD (out-of-distribution)      100             14.2                Scenarios from unseen books
+
+
+Example.    Figure 9 shows a representative CoSER task from Pride and Prejudice.
+
+C.8   LifeChoices
+
+LifeChoice (Xu et al., 2024b) tests persona-driven decision-making by presenting literary
+characters with pivotal life decisions from 388 novels. Models must predict what a character
+
+
+                                              22
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+Table 8: CoSER input context lengths (characters). “Scenario” includes the scene description;
+“Profiles” is all character profiles combined; “Total” is scenario + profiles + plot summary +
+character motivations.
+                                Split      Avg total          Median           P90        Max
+                                ID               7,419          7,092      10,170      13,738
+                                OOD              7,458          6,746      10,916      18,146
+
+
+
+                                    CoSER — Example (Pride and Prejudice)
+  Scenario: The scene is set in Mr. Bennet’s private study. Elizabeth has been summoned unexpectedly. Mr.
+       Bennet holds a letter from Mr. Collins about Elizabeth’s rumored engagement to Mr. Darcy.
+   Characters: Mr Bennet (sardonic patriarch), Elizabeth Bennet (spirited, anxious about rumors)
+
+
+   Ground-Truth Dialogue                                            Model-Generated Dialogue (GPT-4o)
+                                                                    Mr Bennet: (looks up from the letter with a wry smile)
+    Mr Bennet: [I can barely contain my amusement.]
+                                                                    Ah, Elizabeth, my dear. It seems we have a rather
+    Lizzy, I was going to look for you; come into my room.
+                                                                    amusing piece of correspondence here.
+                                                                    Elizabeth: (leans forward with curiosity) Father, I can
+    Elizabeth: [I feel a sense of dread but must appear
+                                                                    only imagine the vigor with which she has expressed
+    calm.] (follows her father) What is it, Papa?
+                                                                    her disapproval. . .
+    Mr Bennet: [This will be entertaining.] I have received         Mr Bennet: (hands the letter to Elizabeth with a
+    a letter this morning that has astonished me exceed-            chuckle) She insists that you must not marry Mr.
+    ingly. . .                                                      Darcy. . .
+
+
+                                         Evaluation Scores (0–100):
+                         Storyline Consistency 69.5 Anthropomorphism                              69.5
+                         Character Fidelity      34.5 Storyline Quality                           59.5
+                           Overall Reward: 0.583              BLEU: ≈0         ROUGE-L: 0.237
+        Key flaws identified: Mr Bennet is portrayed as warm and supportive rather than
+   characteristically sardonic and detached (Character Fidelity: severity 4). Emotional tension is
+  reduced compared to the original (Storyline Consistency: severity 3). The conversation lacks Mr
+                    Bennet’s signature sarcasm (Anthropomorphism: severity 4).
+
+
+
+Figure 9: CoSER example from Pride and Prejudice. The model captures the general narrative
+arc (reading Mr. Collins’ letter) but softens Mr Bennet’s distinctive sardonic personality into
+generic warmth, resulting in low Character Fidelity (34.5). The judge identifies this as the
+primary failure mode: the character behaves too much like a “helpful AI assistant” rather
+than the complex, detached patriarch of the original.
+
+
+would do based on their established personality, narrative context, and motivations. We
+describe the task format, evaluation, and dataset details below.
+
+Task format. Each task provides: (1) a character biography (input text)—an extensive
+narrative summary of the character’s background, personality, experiences, and arc ex-
+tracted from the source novel; (2) a scenario describing the specific situation the character
+faces; (3) a question asking what decision the character makes; and (4) four options (A–D),
+one of which matches the character’s actual choice in the novel. Each option is accompanied
+by a motivation explaining the psychological reasoning behind that choice.
+The model receives the character biography, scenario, question, and options as a structured
+prompt, and must select the correct answer letter.
+
+Evaluation. Evaluation is straightforward exact-match accuracy: the model’s selected
+option is compared to the ground-truth answer. No partial credit is given. The original
+
+
+                                                               23
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+paper reports human performance of 92% versus 63% for the best LLM baseline (GPT-4),
+indicating a substantial gap in persona-driven reasoning.
+
+Context lengths. LifeChoice tasks have notably long input contexts due to the extensive
+character biographies. Table 9 summarizes the context length distribution.
+
+
+Table 9: LifeChoice input context lengths (characters). The context consists of the character
+biography, scenario, question, and options concatenated.
+                                                       Avg       Median            P90        Max
+                                Total context        26,177        25,513      46,300       71,773
+
+The average context of ∼26K characters (∼6.5K tokens) is among the longest in our bench-
+mark suite, reflecting the rich narrative information needed for persona-driven reasoning.
+
+Dataset. The full dataset contains 1,462 decision points from 388 novels. We evaluate on a
+sample of 600 tasks. Decision points span diverse literary genres (fantasy, mystery, literary
+fiction, science fiction) and character archetypes.
+
+Overlap with CoSER. Both LifeChoice and CoSER (Appendix C.7) draw from literary
+novels but test different capabilities: LifeChoice is a discriminative MCQ task (predicting
+what a character would do), while CoSER is a generative multi-turn dialogue task (acting
+as a character). We find 39 books (out of LifeChoice’s 383) that also appear in CoSER’s full
+772-book corpus, covering 151 LifeChoice tasks (9.6%). Of these, only 3 books overlap with
+CoSER’s test set (16 tasks, 1.0%); the remaining 36 books overlap with CoSER’s training-only
+partition (135 tasks, 8.6%). This overlap is a potential data contamination concern for models
+fine-tuned on CoSER training data but does not affect our evaluation of general-purpose
+LLMs.
+
+Example.         Figure 10 shows a representative LifeChoice task.
+
+C.9     MirrorBench
+
+MirrorBench (Hathidara et al., 2026) evaluates user-proxy agents on producing human-like
+utterances, decoupled from downstream task success. We describe the generation protocol,
+evaluation metrics, our adaptation, and dataset details below.
+
+Generation protocol. Given a reference dialogue dref                                   ref ref                    ref ref
+                                                                               j = [( u j,1 , a j,1 ), . . . , ( u j,L , a j,L )] and
+a synthesized user goal g j summarizing the user’s intent and communication style,
+MirrorBench generates a synthetic rollout dˆj = [(û j,1 , â j,1 ), . . . , (û j,L , â j,L )] as follows.
+At each turn t, the user-proxy LLM θu receives the accumulated dialogue history
+[(û j,1 , â j,1 ), . . . , (û j,t−1 , â j,t−1 )] plus the goal g j as a system prompt, and generates the next
+user turn û j,t . The assistant LLM θ a then produces a contextual reply â j,t , conditioned on
+both the ongoing synthetic dialogue and the original reference conversation dref                                        j , so that
+the rollout trajectory stays close to the original. Critically, all user turns are generated by
+the proxy and all assistant turns are generated by an LLM—there is no verbatim replay
+of original turns. In the original paper, the assistant is fixed to GPT-4o for all primary
+experiments; the authors report that “LLM hallucinations can occasionally induce drift” in
+assistant responses but find divergence in <1% of samples.
+
+Evaluation granularity. All metrics operate at the full-conversation level, not turn-by-
+turn. The judge sees the entire proxy conversation dˆj (or its user-side transcript) compared
+against the entire reference dref
+                              j , and produces a single score per episode. For lexical metrics,
+all proxy user turns are concatenated into one token sequence t̂i and compared against the
+concatenated human user turns tref i .
+
+
+                                                                24
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+                                              LifeChoice — Example
+                           Character: Amelia Choquet              Book: A Great Reckoning
+                             Character Biography (excerpt, 300 of ∼25K chars):
+    The novel begins in November in the small Canadian town of Three Pines. Armand Gamache is at home, reviewing
+    applications from individuals hoping to be admitted as students into the police academy. The file of one young woman
+    named Amelia Choquet sticks in his mind. . .
+
+
+  Scenario: Amelia Choquet, a cadet at the Sûreté Academy, is faced with a proposition from her professor,
+  Serge Leduc, who offers to secure her position at the academy in exchange for sexual favors. Upon refusal,
+                                         Leduc threatens to expel her.
+    Question: What decision does Amelia make when confronted with Leduc’s proposition and threats?
+                                               Options:
+       A.    Accept Leduc’s proposition to secure her future at the academy.
+       B.    Reject Leduc’s advances and refuse to be intimidated by his threats.
+       C.    Report Leduc’s behavior to the academy’s administration, risking disbelief and
+             retaliation.
+       D.    Attempt to transfer to another academy to escape the situation.
+                                                 Correct Answer: B
+
+
+  Motivation for B: Amelia resolutely rejects Leduc’s advances because her integrity and self-respect are
+                paramount. She refuses to be coerced, despite the threat of expulsion. . .
+
+
+
+Figure 10: LifeChoice example. The model receives ∼25K characters of character biography
+and must predict Amelia’s decision. All four options are psychologically plausible—the
+distractors represent reasonable alternatives—but only one matches the character’s actual
+choice in the novel. Selecting the correct answer requires understanding Amelia’s personal-
+ity, values, and character arc.
+
+
+Metrics. MirrorBench combines two metric families: three lexical diversity metrics and
+three judge-based realism metrics, capturing complementary facets of human-likeness.
+
+Lexical diversity metrics measure vocabulary richness and repetition patterns of the proxy’s
+user turns, z-score normalized against the human distribution on the same dataset:
+• MATTR (Moving-Average Type-Token Ratio): vocabulary diversity over a sliding win-
+  dow (w = 50).
+• HD-D (Hypergeometric Distribution Diversity): vocabulary diversity robust to sequence
+  length.
+• Yule’s K: repetitiveness from the token-frequency spectrum (higher K = more repetition).
+
+Judge-based realism metrics use LLM judges to assess whether the proxy’s user turns sound
+like a real human. The three metrics differ in what information the judge receives and what
+question it answers:
+• GTEval (reference-comparative): The judge sees both the proxy conversation and the
+  human reference side by side, and scores their similarity on [0, 1]. This measures how
+  closely the proxy reproduces the specific human behavior.
+• Pairwise Indistinguishability (PI) (reference-discriminative): The judge sees two
+  anonymized conversations—one proxy, one human—in random order (labeled A/B)
+  and picks which user sounds more human. This is a blind A/B test; the score is the
+  proxy’s win rate. A score near 0.5 means the proxy is indistinguishable from the human.
+• Rubric-and-Reason (RNR) (reference-free): The judge sees only the proxy conversation
+  and rates whether the user sounds human-like based on a rubric covering style, behavior,
+  and tone. Returns YES/NO. This judges realism in absolute terms without any human
+  reference.
+
+
+                                                            25
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+Each judge metric is executed with a self-consistency parameter c ≥ 1 (repeated judgments
+under the same prompt). Scores are calibrated via Human–Human (HH) and Proxy–Proxy
+(PP) controls: HH compares the human conversation to itself (expected ceiling ≈ 1.0 for
+GTEval, ≈ 0.5 for PI), and PP compares the proxy to itself (expected baseline).
+
+
+Our adaptation. In our evaluation framework, we run MirrorBench in single-turn assistant
+mode: the user-proxy LLM generates all user turns iteratively, but assistant responses are
+replayed verbatim from the original dataset rather than generated by a separate LLM. This
+simplification is inconsequential for conversations with a single user turn (most of Arena,
+all of QuLAC), since there is no subsequent turn where assistant coherence matters. For
+multi-turn conversations (all of ClariQ, most of OASST1), replayed assistant responses
+may become contextually misaligned if the proxy’s user turn diverges from the original,
+potentially causing cascading drift. We use GPT-5.4 as the judge model for all metrics.
+
+
+Datasets. We evaluate on four subsets drawn from different conversational domains.
+Table 10 summarizes their structure.
+
+
+Table 10: MirrorBench dataset statistics. “User turns” indicates how many user messages
+the model must generate per conversation.
+             Subset     # Tasks        User turns       Total turns    Domain
+             Arena          195     1–12 (avg 1.2)            2–24     Open-ended chat
+             ClariQ         200             4 (all)              7     Query clarification
+             OASST1         200      1–3 (avg 1.8)             2–6     Open-domain QA
+             QuLAC          200             1 (all)              2     Query clarification
+
+
+
+
+Table 11: MirrorBench input context lengths (characters). “Task desc.” is the synthesized
+user goal; “Conv.” is the reference conversation content. Percentiles are over total context
+(task description + conversation).
+             Subset     Avg desc.     Avg conv.       Avg total       P50    P90     Max
+             Arena            307          1,172          1,479   1,179     2,615   14,976
+             ClariQ           336            327            663     658       755      848
+             OASST1           339          1,811          2,150   1,862     3,931   11,648
+             QuLAC            302             93            394     388       468      546
+
+
+
+• ChatBot Arena (Zheng et al., 2023) conversations come from the LMSYS Chatbot Arena
+  platform. Most (173/195) are single user-turn exchanges, but 22 are multi-turn (up to 12
+  user turns).
+• ClariQ (Aliannejadi et al., 2019) consists of information-seeking dialogues where the user
+  progressively clarifies their intent across 3 clarification rounds (4 user turns, 3 assistant
+  turns per conversation). All 200 conversations are multi-turn.
+• OASST1 (Köpf et al., 2023) draws from the Open Assistant dataset. Conversations range
+  from 1 to 3 user turns (52 single-turn, 130 two-turn, 18 three-turn), covering diverse topics
+  from factual QA to creative writing.
+• QuLAC (Aliannejadi et al., 2021) presents a single clarifying question from the assistant;
+  the model generates the user’s response based on the underlying information need (facet).
+  All 200 conversations have exactly 1 user turn.
+
+
+Examples. Figures 11–14 show representative examples from each subset, comparing
+ground-truth human turns against model-generated (GPT-5.4) proxy turns along with
+evaluation scores.
+
+
+                                                   26
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+                                    MirrorBench (Arena) — Example
+  Task Description: The user seeks concise advice on how to effectively begin a fully remote job, requesting
+    the information in a clear, bullet-point format. The tone is straightforward and focused on actionable
+                                                   guidance.
+
+
+                                  Ground-Truth Human Turn:
+    User: Summarise in 5 bullet points tips for starting a new 100% remote job.
+
+                      Assistant Response (replayed from original conversation):
+    Assistant: Here are 5 tips for starting a new 100% remote job: 1. Set up a dedicated workspace.
+    . . . 2. Establish a routine. . . . 3. Communicate with your team. . . . 4. Take breaks. . . . 5. Set
+    boundaries. . . .
+
+                                 Model-Generated User Turn (GPT-5.4):
+    Proxy User: Can you give me concise, practical tips for starting a fully remote job success-
+    fully? Please use clear bullet points and focus on actionable advice for staying productive
+    and comfortable.
+
+                                         Evaluation Scores:
+                          GT-Eval           0.89 Pairwise Indisting.            0.0
+                          Rubric & Reason    1.0
+  Lexical Diversity (Human → Proxy): MATTR 0.95 → 0.94               HD-D 0.95 → 0.94       Yule’s K 55 →
+                                           39
+                                          Overall Reward: 0.723
+
+
+Figure 11: MirrorBench (Arena) example. This Arena conversation has a single user turn.
+The proxy captures the intent but drops the specific formatting constraint (“5 bullet points”,
+“Summarise”), making it distinguishable from the human turn (Pairwise = 0.0). RNR scores
+1.0 because the proxy still sounds human in isolation.
+
+
+C.10   UserLLM
+
+UserLLM (Naous et al., 2025) evaluates single-turn user utterance generation: given a
+conversation context and a user intent, the model generates one user turn. We describe the
+generation protocol, evaluation metrics, and dataset details below.
+
+Generation protocol. Each task provides an intent (a natural-language description of the
+user’s goal) and a conversation history (prior user–assistant turns). The model receives a
+system prompt instructing it to act as a realistic human user—including occasional typos,
+imperfect punctuation, and information splitting across turns—and generates the next user
+message. For first turns (empty conversation history), the model generates the opening
+message. For sequential turns, the model also receives a termination instruction: it may
+append a special token <|endconversation|> to signal that the conversation should end.
+
+Evaluation granularity. Each task is scored independently. The three subtasks use entirely
+different metrics, reflecting different facets of user simulation quality.
+
+Metrics.    UserLLM defines three subtasks, each with its own metric:
+
+CSQA — Role Adherence tests whether the model stays in the questioner role rather than
+leaking answers. The conversation context presents a commonsense multiple-choice ques-
+tion; the assistant responds with uncertainty and asks for help. A good user simulator
+should rephrase or insist on its question—not provide the answer.
+
+
+                                                     27
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+                                           MirrorBench (ClariQ) — Example
+  Task Description: The user is looking for images of flowering plants and is not interested in additional
+  information about their size, gardening requirements, or distinctive features. The user is direct and focused
+                                   on their specific request for visual content.
+
+
+  Ground-Truth (Human) Turns                                    Model-Generated (Proxy) Turns
+                                                                U1: Can you show me pictures of different flowering
+   U1: tell me more flowering plants
+                                                                plants?
+    A1: how big would you like your flowering plants to get
+
+                                                                U2: I’m just looking to see pictures of different flowering
+   U2: no                                                       plants. Size doesn’t matter.
+    A2: how much gardening do you want with your flowering plant
+
+                                                                U3: I’m not looking for gardening info—just pictures of
+   U3: I’d like to see pictures of flowering plants.
+                                                                different flowering plants.
+    A3: do you want to know about distinctive features of a flowering plant
+
+                                                                U4: No, I just want to see pictures of different flowering
+   U4: No, I would like to see pictures of flowering plants.
+                                                                plants.
+
+
+                                              Evaluation Scores:
+                               GT-Eval           0.69 Pairwise Indisting.                     1.0
+                               Rubric & Reason    1.0
+  Lexical Diversity (Human → Proxy): MATTR 0.63 → 0.55                           HD-D 0.63 → 0.61             Yule’s K 329
+                                         → 291
+                                                   Overall Reward: 0.923
+
+
+Figure 12: MirrorBench (ClariQ) example. All 4 user turns are generated; assistant turns
+are replayed. The human starts vaguely (“tell me more flowering plants”) and clarifies
+gradually, whereas the proxy front-loads its intent from Turn 1. GT-Eval is lower (0.69)
+because the judge sees both full conversations side by side and detects the early-turn
+divergence. PI scores 1.0 because in a blind A/B comparison, the proxy’s conversation still
+reads as plausibly human.
+
+
+• The generated turn and all answer-choice texts are normalized (lowercased, punctuation
+  removed).
+• If the turn contains 1–2 of the choice texts as substrings: role adherence = 0 (the model is
+  answering rather than asking).
+• If it mentions none (or all, indicating question repetition): role adherence = 1 (the model
+  stays in the user role).
+
+NQ — Intent Adherence tests whether the model insists on its original question when the
+assistant deflects. The context presents a factoid question; the assistant claims uncertainty
+and suggests a different topic. A good user simulator should refuse the redirection and
+re-ask.
+
+• An LLM judge classifies the generated turn as either REFUSED (user re-asked their ques-
+  tion) or ACCEPTED (user followed the assistant’s redirection).
+• intent adherence = 1 if REFUSED, 0 if ACCEPTED.
+
+PRISM — Multi-Metric evaluates diverse facets of user simulation on open-ended conver-
+sations from the PRISM alignment dataset. Four metrics are computed:
+
+• First-turn diversity: Pairwise 1-gram Jaccard distance across all first-turn generations.
+  Higher = more diverse opening messages across different intents.
+
+
+                                                               28
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+                                         MirrorBench (OASST1) — Example
+  Task Description: The user seeks a clear and simple explanation of why and how lightning strikes occur,
+   initially asking for a straightforward description and then requesting an even more simplified version
+                       suitable for an eight-year-old. The tone is inquisitive and patient.
+
+
+  Ground-Truth (Human) Turns                                     Model-Generated (Proxy) Turns
+    U1: How, and why, are lightning strikes happening?            U1: Can you make it even simpler, like you’re explain-
+    Explain in simple terms.                                      ing it to an 8-year-old?
+     A1: Lightning strikes happen because of the buildup of electrical charges in the atmosphere. Thunderstorms form
+     when warm, moist air rises and cools, forming clouds. . .
+                                                                  U2: Thanks, that helps. Can you also explain why thun-
+    U2: Could you explain this again as if I was a eight year
+                                                                  der happens right after lightning, in a really simple way
+    old?
+                                                                  too?
+     A2: Lightning is a natural phenomenon that happens when electricity travels from the clouds to the ground. You know
+     how static electricity can make your hair stand up. . .
+
+
+                                               Evaluation Scores:
+                                GT-Eval           0.82 Pairwise Indisting.                    0.0
+                                Rubric & Reason    1.0
+  Lexical Diversity (Human → Proxy): MATTR 0.93 → 0.86                           HD-D 0.93 → 0.86            Yule’s K 48 →
+                                           91
+                                                   Overall Reward: 0.705
+
+
+Figure 13: MirrorBench (OASST1) example. Both user turns are generated; assistant turns
+are replayed in fixed order. The proxy skips the initial question entirely—its Turn 1 already
+requests simplification for an 8-year-old (the human’s Turn 2 intent), then its Turn 2 drifts to
+a new topic (thunder). Because assistant responses are replayed regardless, the conversation
+becomes incoherent. PI detects this when comparing both full conversations in a blind A/B
+test (0.0), while RNR still scores 1.0 because the proxy’s turns sound human in isolation.
+
+
+• Intent decomposition: 1-gram overlap (stopword-filtered) between the intent description
+  and the generated turn, |intent ∩ output|/|output|. Lower = better, indicating the user
+  elaborates beyond simply parroting the intent.
+• Termination F1: Whether the model correctly predicts conversation endings via the
+  <|endconversation|> token, measured as F1 over predicted vs. ground-truth last turns.
+• AI detector score: Fraction of generated text classified as AI-written by an external
+  detector (Pangram API). Lower = more human-like.
+
+Datasets. We sample 600 tasks per subtask from the full data. Table 12 summarizes the
+three subtasks.
+
+                                       Table 12: UserLLM dataset statistics.
+               Subtask        Source                       # Tasks     Metric
+               CSQA           CommonsenseQA                     600    Substring match (role adherence)
+               NQ             Natural Questions                 600    LLM judge (intent adherence)
+               PRISM          PRISM Alignment                   600    Multi-metric (4 scores)
+
+
+Examples.         Figures 15–17 show representative examples from each subtask.
+
+D      Detailed Comparison of Verbal Feedback Methods
+Table 14 provides a systematic comparison of approaches that go beyond single scalar re-
+wards for language model training. We categorize methods along three axes: how feedback
+
+
+                                                                29
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+                                  MirrorBench (QuLAC) — Example
+  Task Description: The user is seeking a comprehensive timeline or map that details all the battles of the
+  US Civil War. They are not focused on any specific state but want an overview of the major battles. The
+                                 user is direct and clear in their request.
+                    Underlying Facet: Find a timeline or map of US civil war battles.
+
+
+                                    Conversation Context (replayed):
+    Assistant: is there a certain state that you are interested in seeing battles for
+
+                                   Ground-Truth Human Turn:
+    User: no i would like a timeline or map of all of the us civil war battles
+
+                                Model-Generated User Turn (GPT-5.4):
+    Proxy User: Not a specific state—I’m looking for a broad overview of the major Civil War
+    battles across the whole war. A timeline or map covering the main battles from start to finish
+    would be great.
+
+                                         Evaluation Scores:
+                          GT-Eval           0.68 Pairwise Indisting.           1.0
+                          Rubric & Reason    1.0
+  Lexical Diversity (Human → Proxy): MATTR 0.94 → 0.87                HD-D 0.94 → 0.87     Yule’s K 78 →
+                                           83
+                                         Overall Reward: 0.920
+
+
+Figure 14: MirrorBench (QuLAC) example. QuLAC conversations consist of one assistant
+clarification question and one user response. The proxy produces a more verbose but
+semantically aligned answer. GT-Eval is lower (0.68) because the judge sees differences in
+specificity and phrasing when comparing side by side. PI scores 1.0 because in a blind test,
+the proxy’s response is equally plausible as the human’s.
+
+
+
+Table 13: UserLLM input context lengths (characters). “Intent” is the user goal description;
+“Conv.” is the conversation history. Percentiles are over total context (intent + conversation
+history).
+               Subtask     Avg intent     Avg conv.       Avg total    P50     P90       Max
+               CSQA                116            302           418    409      502       824
+               NQ                   79            298           378    371      441       551
+               PRISM               118          1,030         1,148    715    2,853    14,274
+
+
+
+
+is represented (scalar, multi-scalar, or verbal), at what granularity it is applied (episode,
+sequence, segment, or token level), and the training paradigm used (SFT, inference-only,
+DPO, AWR, or GRPO).
+Among the RL-based methods that use verbal feedback, RLTF-SD and our approach share
+the same self-distillation structure—both generate a teacher rollout conditioned on feedback
+and train the base policy to internalize the teacher’s improvements. The key algorithmic dis-
+tinction is the optimization method: RLTF-SD uses advantage-weighted regression (AWR),
+which performs weighted supervised learning on teacher outputs without importance cor-
+rection, while our method uses GRPO over the joint student-teacher group with trust-region
+clipping. Experiential RL also follows a reflect-and-revise pattern but consolidates improve-
+ments through supervised fine-tuning on successful second attempts rather than through
+on-policy RL.
+
+
+                                                     30
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+                          UserLLM (CSQA) — Role Adherence Example
+  Intent: Answer a multiple-choice commonsense question: Where would you find a bee gathering pollen?
+          Choices: A. united states B. sky C. court D. field of flowers E. orchard
+
+
+                                      Conversation Context:
+    User: Where would you find a bee gathering pollen? The choices are: united states, sky,
+    court, field of flowers, orchard.
+    Assistant: I’m not entirely sure which option is the best fit. Could you help me out by
+    providing more context or telling me what you think the answer might be?
+
+                               Model-Generated User Turn (GPT-5.4):
+    Proxy User: field of flowers
+
+
+      Evaluation: The generated turn contains the choice text “field of flowers” (1 match) →
+  role adherence = 0. The model leaked the answer instead of staying in the questioner role. A
+  correct user simulation would rephrase the question or ask for clarification without providing
+                                            answers.
+
+
+Figure 15: UserLLM (CSQA) example. The assistant feigns uncertainty to test whether the
+user simulator maintains its questioner role. Here, GPT-5.4 directly provides the answer
+(“field of flowers”), failing role adherence. A score of 1 would require the model to stay in
+the user role without mentioning specific answer choices.
+
+
+                           UserLLM (NQ) — Intent Adherence Example
+                Intent: Get an answer to the question: who wrote come on up to the house
+
+
+                                    Conversation Context:
+    User: who wrote come on up to the house
+
+    Assistant: I’m not entirely sure who wrote that song. However, if you’re interested, I can
+    help you find some information about the song’s themes or its covers. Would you like that
+    instead?
+
+                               Model-Generated User Turn (GPT-5.4):
+    Proxy User: i mean the song — who wrote it?
+
+
+   Evaluation: LLM judge classifies the user’s response as REFUSED (user re-asked their original
+    question, rejecting the assistant’s redirection) → intent adherence = 1. The model correctly
+                                      insists on its original intent.
+
+
+
+Figure 16: UserLLM (NQ) example. The assistant deflects the user’s factoid question and
+offers an alternative topic. A good user simulator should refuse this redirection and re-ask.
+Here, GPT-5.4 correctly insists (“i mean the song — who wrote it?”), scoring 1.0 on intent
+adherence.
+
+
+All prior verbal-feedback RL methods have been evaluated exclusively on tasks with
+verifiable rewards (code, math, reasoning puzzles, tool use). Our work is the first to apply
+verbal-feedback self-distillation to social simulation, where rewards are noisy, subjective,
+and multi-dimensional.
+
+
+
+                                                  31
+Reinforcing Human Behavior Simulation via Verbal Feedback
+
+
+
+
+                                         UserLLM (PRISM) — Multi-Metric Examples
+   PRISM tasks span multiple turns (our evaluation sample: 300 first turns + 300 second turns). We show
+                                           one example of each.
+
+
+                                          Example A: First turn (turn 0)
+                   Intent: Gain insight into the current state of musical creation and its influences.
+                   Conversation Context: (empty — opening message) Is last turn: False
+                                             Model-Generated User Turn (GPT-5.4):
+        Proxy User: what are the biggest things influencing how music is being made right now?
+                         Intent decomposition                  0.0 (no intent keywords leaked — good)
+                         AI detector score                     0.0 (classified as human-written — good)
+                         Pred termination                      False (correct — not the last turn)
+
+                                           Example B: Sequential turn (turn 1)
+                                    Intent: Explore topics related to romance and intimacy.
+                                                  Conversation Context:
+        User: kissing
+
+        Assistant: I apologize, I should not make assumptions or judgments. Let’s move our
+        conversation in a more constructive direction.
+                                                               Is last turn: True
+                                             Model-Generated User Turn (GPT-5.4):
+        Proxy User: how do i get better at kissing?
+             Intent decomposition                0.0 (rephrased without copying intent keywords — good)
+             AI detector score                   0.0 (classified as human-written — good)
+             Pred termination                    False (incorrect — this was the last turn)
+        First-turn diversity and termination F1 are computed as batch-level aggregates across all tasks, not
+                                                   per-instance.
+
+
+
+Figure 17: UserLLM (PRISM) examples. Example A: First-turn generation from a high-
+level intent; the model rephrases naturally without copying intent keywords. Example B:
+Sequential turn with conversation history; the model generates a natural follow-up but fails
+to predict conversation termination (the ground truth marks this as the last turn, but the
+model does not emit the <|endconversation|> token). This termination prediction failure is
+common and contributes to the low termination F1 in aggregate.
+
+
+Table 14: Comparison of approaches that go beyond single scalar rewards for language
+model training. We categorize methods along three axes: how feedback is represented, at
+what granularity it is applied, and the training paradigm. Our work is the first to incorporate
+verbal feedback into RL for social simulation, where rewards are noisy, subjective, and multi-
+dimensional.
+ Method                                   Feedback Form           Granularity            Training               Domain            Weight Update
+ SFT-based / Inference-time
+ ILF (Scheurer et al., 2023)              Verbal (human)            Sequence                SFT           Summarization, Code          ✓
+ Chain of Hindsight (Liu et al., 2024)    Verbal (human)            Sequence                SFT                General                 ✓
+ Reflexion (Shinn et al., 2023)           Verbal (self)              Episode             Inference            Code, QA                 ✗
+ Self-Refine (Madaan et al., 2023)        Verbal (self)             Sequence             Inference           Code, Math                ✗
+ Multi-dimensional / Fine-grained scalar rewards
+ Fine-Grained RLHF (Wu et al., 2023) Multi-scalar (human)           Segment               PPO                  Detox, QA               ✓
+ Sotopia-RL (Yu et al., 2025)              Multi-scalar (LLM)       Utterance              RL                  Social sim              ✓
+ PPP (Sun et al., 2025)                    Multi-scalar (LLM)       Sequence           Multi-obj RL           SE, Research             ✓
+ Verbal feedback in RL
+ Self-Rewarding (Yuan et al., 2024)       Verbal (self)             Sequence              DPO                   General                ✓
+ RLTF (Song et al., 2026)                 Verbal (LLM)            Token (distill)    RL + distillation       Code, Control             ✓
+ Critique-GRPO (Zhang et al., 2025)       Verbal (LLM)              Sequence              GRPO                   Math                  ✓
+ Experiential RL (Shi et al., 2026)       Verbal (self)              Episode        RL + consolidation      Control, Tool-use          ✓
+ Ours                                     Verbal (LLM judge)      Token (distill)   GRPO + distillation   Social sim (10 tasks)        ✓
+
+
+
+
+                                                                        32
+

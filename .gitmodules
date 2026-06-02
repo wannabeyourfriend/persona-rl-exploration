@@ -1,0 +1,3 @@
+[submodule "OdysSim"]
+	path = OdysSim
+	url = https://github.com/wannabeyourfriend/OdysSim.git

@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Pre-commit guard: block secrets from ever being staged/pushed.
+# Activated via:  git config core.hooksPath .githooks
+set -euo pipefail
+
+fail=0
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+
+# 1) Block env files (allow .env.example only)
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  case "$f" in
+    .env.example) ;;
+    .env|.env.*|*.env) echo "BLOCKED: refusing to commit secret file: $f"; fail=1 ;;
+  esac
+done <<< "$staged"
+
+# 2) Scan staged content for credential patterns
+patterns='(hf_[A-Za-z0-9]{30,}|gh[pousr]_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|sk-[A-Za-z0-9]{20,})'
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  [ -f "$f" ] || continue
+  if git show ":$f" 2>/dev/null | grep -nEq "$patterns"; then
+    echo "BLOCKED: possible secret detected in staged content: $f"
+    fail=1
+  fi
+done <<< "$staged"
+
+if [ "$fail" -ne 0 ]; then
+  echo ""
+  echo "Commit aborted. Remove the secret (use .env, which is gitignored) and re-commit."
+  echo "To bypass intentionally (NOT recommended): git commit --no-verify"
+  exit 1
+fi

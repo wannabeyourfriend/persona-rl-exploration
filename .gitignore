@@ -1,0 +1,22 @@
+# --- Secrets (never commit) ---
+.env
+.env.*
+*.env
+!.env.example
+
+# --- Data: stored on HuggingFace, not in git (dir structure kept via .gitkeep) ---
+data/**/*.parquet
+data/**/*.arrow
+data/**/*.json
+data/**/*.jsonl
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# --- Misc ---
+.DS_Store
+*context-usage*.txt
