@@ -58,6 +58,8 @@ docker run --rm --runtime=runc --entrypoint /bin/bash --network=host --ipc=host 
       actor_rollout_ref.rollout.max_num_seqs=8 \
       actor_rollout_ref.rollout.gpu_memory_utilization=0.3 \
       actor_rollout_ref.rollout.enforce_eager=True \
+      actor_rollout_ref.rollout.free_cache_engine=False \
+      actor_rollout_ref.rollout.enable_sleep_mode=False \
       actor_rollout_ref.model.use_fused_kernels=False \
       +actor_rollout_ref.model.override_config.attn_implementation=eager \
       actor_rollout_ref.actor.fsdp_config.use_torch_compile=False \
