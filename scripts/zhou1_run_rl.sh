@@ -33,6 +33,10 @@ CUDA_DEVICES="${CUDA_DEVICES:-0,1,2,3}"
 TOTAL_TRAINING_STEPS="${TOTAL_TRAINING_STEPS:-200}"
 SAVE_FREQ="${SAVE_FREQ:-50}"
 TEST_FREQ="${TEST_FREQ:-5}"
+# Extra Hydra args appended verbatim to recipe/ditto/run_rl.sh, e.g.:
+#   EXTRA_ARGS="trainer.val_before_train=False"                  # skip the upfront 100-instance val
+#   EXTRA_ARGS="actor_rollout_ref.rollout.gpu_memory_utilization=0.6 ..."  # OOM fallbacks
+EXTRA_ARGS="${EXTRA_ARGS:-}"
 
 # ── External judge/partner endpoint (sotopia & other interactive tasks) ───────
 # sotopia (default mode too) calls real OpenAI for the partner + 7-dim judge +
@@ -79,7 +83,7 @@ docker run --rm --runtime=runc --entrypoint /bin/bash --network=host --ipc=host 
     TOTAL_TRAINING_STEPS='${TOTAL_TRAINING_STEPS}' \
     SAVE_FREQ='${SAVE_FREQ}' \
     TEST_FREQ='${TEST_FREQ}' \
-    bash recipe/ditto/run_rl.sh '${TASK}'" 2>&1 | tee "${LOG_FILE}"
+    bash recipe/ditto/run_rl.sh '${TASK}' ${EXTRA_ARGS}" 2>&1 | tee "${LOG_FILE}"
     # ── If you hit CUDA OOM on 4 GPUs, append these proven (smoke) fallbacks to
     #    the run_rl.sh line above, easing the heaviest knobs first:
     #      actor_rollout_ref.rollout.gpu_memory_utilization=0.6 \
