@@ -70,6 +70,7 @@ docker run --rm --runtime=runc --entrypoint /bin/bash --network=host --ipc=host 
   -e OPENAI_API_KEY -e OPENAI_BASE_URL \
   -e GPT54_OPENAI_API_KEY -e GPT54_OPENAI_BASE_URL \
   -e HF_TOKEN -e WANDB_API_KEY \
+  -e SIM_LLM_MODEL -e SIM_LLM_USE_FALLBACK -e SIM_LLM_REASONING \
   -e "JUDGE_MODEL_NAME=${JUDGE_MODEL_NAME}" \
   -e "JUDGE_MODEL_REASONING=${JUDGE_MODEL_REASONING}" \
   "${IMAGE}" \
