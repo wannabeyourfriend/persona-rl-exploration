@@ -61,7 +61,8 @@ docker run --rm --runtime=runc --entrypoint /bin/bash --network=host --ipc=host 
   -e "LD_LIBRARY_PATH=/usr/local/nvidia/lib64:${LD_LIBRARY_PATH:-}" \
   -e PYTHONPATH=/workspace/persona-rl/OdysSim \
   -e "CUDA_VISIBLE_DEVICES=${CUDA_DEVICES}" \
-  -e WANDB_MODE=offline \
+  -e "WANDB_MODE=${WANDB_MODE:-online}" \
+  -e "WANDB_PROJECT=${WANDB_PROJECT:-ditto}" \
   -e HYDRA_FULL_ERROR=1 \
   -e TOKENIZERS_PARALLELISM=false \
   -e RAY_TMPDIR=/workspace/persona-rl/tmp/ray \
