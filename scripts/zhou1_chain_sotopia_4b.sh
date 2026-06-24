@@ -12,7 +12,7 @@ export OPENAI_BASE_URL="${OPENAI_BASE_URL:-http://100.94.99.25:8000/v1}"
 export SIM_LLM_MODEL="${SIM_LLM_MODEL:-qwen-judge}"
 
 MODEL="${MODEL:-/home/2025user/zhou/hf_models/Qwen/Qwen3-4B-Instruct-2507}"
-GPU=actor_rollout_ref.rollout.gpu_memory_utilization=0.5   # other users share the A100s
+GPU=actor_rollout_ref.rollout.gpu_memory_utilization=0.3   # heavy other-user load (~20GB/GPU); keep peak ~48GB
 
 run() {  # $1=agent_version  $2=experiment_name
   echo "=== [$(date)] START $2 (agent_version=$1) ==="
