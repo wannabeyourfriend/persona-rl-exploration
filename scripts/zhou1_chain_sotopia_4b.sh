@@ -7,8 +7,11 @@ set -uo pipefail
 cd "$(dirname "$0")/.."   # repo root
 
 set -a; source .env 2>/dev/null; set +a   # HF_TOKEN, WANDB_API_KEY
-export OPENAI_API_KEY="${OPENAI_API_KEY:-EMPTY}"
-export OPENAI_BASE_URL="${OPENAI_BASE_URL:-http://100.94.99.25:8000/v1}"
+# NOTE: .env also exports OPENAI_BASE_URL=https://api.openai.com/v1 (blocked from
+# China) and a real OPENAI_API_KEY. Judge/partner are the LOCAL zhou-2 llama.cpp,
+# so FORCE the local endpoint here (override .env). Use JUDGE_URL to point elsewhere.
+export OPENAI_BASE_URL="${JUDGE_URL:-http://100.94.99.25:8000/v1}"
+export OPENAI_API_KEY="EMPTY"
 export SIM_LLM_MODEL="${SIM_LLM_MODEL:-qwen-judge}"
 
 MODEL="${MODEL:-/home/2025user/zhou/hf_models/Qwen/Qwen3-4B-Instruct-2507}"
