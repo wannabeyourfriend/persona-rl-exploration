@@ -1,3 +1,6 @@
 [submodule "OdysSim"]
 	path = OdysSim
 	url = https://github.com/wannabeyourfriend/OdysSim.git
+[submodule "UserRL"]
+	path = UserRL
+	url = https://github.com/wannabeyourfriend/UserRL.git
